@@ -1,0 +1,16 @@
+{
+  "apiVersion": 5,
+  "id": "transcribe",
+  "name": "Transcribe",
+  "version": "2.0.0",
+  "description": "Transcribes audio and video into timestamped segments with either local Whisper or an explicitly selected OpenAI connection.",
+  "author": [
+    "Yanik"
+  ],
+  "authorUrl": [
+    "https://github.com/yanik02"
+  ],
+  "isDesktopOnly": true,
+  "minAppVersion": "0.1.0",
+  "enabled": true
+}

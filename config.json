@@ -1,0 +1,835 @@
+{
+  "icon": "text-align-left",
+  "main": "runtime/index.js",
+  "uiSlots": {
+    "right_sidebar": "transcribe.file",
+    "main_workspace": "transcribe.page",
+    "footer": "transcribe.footer"
+  },
+  "slotDefaults": {
+    "right_sidebar": {
+      "order": 100,
+      "side": "hidden"
+    },
+    "footer": {
+      "side": "right",
+      "order": 10
+    }
+  },
+  "datasets": [
+    {
+      "id": "transcriptions",
+      "store": "durable",
+      "version": 1,
+      "title": "Transcriptions",
+      "primaryKey": [
+        "id"
+      ],
+      "columns": {
+        "id": {
+          "type": "text"
+        },
+        "file": {
+          "type": "text"
+        },
+        "fileHash": {
+          "type": "text"
+        },
+        "language": {
+          "type": "text"
+        },
+        "model": {
+          "type": "text",
+          "nullable": true
+        },
+        "transcriptionDurationMs": {
+          "type": "integer",
+          "nullable": true
+        },
+        "createdAt": {
+          "type": "datetime"
+        }
+      },
+      "indexes": [
+        {
+          "id": "file",
+          "columns": [
+            "file"
+          ],
+          "unique": true
+        }
+      ],
+      "titleKey": "auto.ef84d55ad876"
+    },
+    {
+      "id": "transcript_segments",
+      "store": "durable",
+      "version": 1,
+      "title": "Transcript segments",
+      "primaryKey": [
+        "transcriptionId",
+        "position"
+      ],
+      "columns": {
+        "transcriptionId": {
+          "type": "text"
+        },
+        "position": {
+          "type": "integer"
+        },
+        "segmentId": {
+          "type": "text"
+        },
+        "start": {
+          "type": "real"
+        },
+        "end": {
+          "type": "real"
+        },
+        "text": {
+          "type": "text"
+        }
+      },
+      "indexes": [
+        {
+          "id": "segment_id",
+          "columns": [
+            "segmentId"
+          ],
+          "unique": true
+        }
+      ],
+      "relations": [
+        {
+          "kind": "foreign-key",
+          "columns": [
+            "transcriptionId"
+          ],
+          "targetDataset": "transcriptions",
+          "targetColumns": [
+            "id"
+          ],
+          "onDelete": "cascade"
+        }
+      ],
+      "titleKey": "auto.c19cabc4a949"
+    }
+  ],
+  "pathRefs": [
+    {
+      "source": "dataset",
+      "dataset": "transcribe.transcriptions",
+      "pathColumn": "file"
+    }
+  ],
+  "provides": [
+    {
+      "id": "metadataPanel.segment",
+      "kind": "extension",
+      "version": "1.0.0"
+    },
+    {
+      "id": "fileTree.contextItem",
+      "kind": "extension",
+      "version": "1.0.0"
+    },
+    {
+      "id": "workspace.surface",
+      "version": "1.0.0",
+      "kind": "extension"
+    }
+  ],
+  "drivers": [],
+  "guardPresets": {
+    "schemaVersion": 1,
+    "defaultPreset": "recommended",
+    "presets": [
+      {
+        "id": "recommended",
+        "label": "Recommended",
+        "version": 1,
+        "description": "Local Whisper stays on this machine. OpenAI runs upload audio only after the cloud engine is selected and a transcription is started.",
+        "entries": {
+          "commands": {
+            "file": {
+              "decision": "allow"
+            }
+          }
+        }
+      },
+      {
+        "id": "ask-for-writes",
+        "label": "Ask for writes",
+        "version": 1,
+        "description": "Confirm before a transcription starts — local runs can occupy the CPU and OpenAI runs upload the selected audio.",
+        "entries": {
+          "commands": {
+            "file": {
+              "decision": "confirm",
+              "allowPreApproval": false
+            }
+          }
+        }
+      },
+      {
+        "id": "blocked",
+        "label": "Blocked",
+        "version": 1,
+        "description": "No transcriptions at all.",
+        "entries": {
+          "commands": {
+            "file": {
+              "decision": "deny"
+            }
+          }
+        }
+      }
+    ]
+  },
+  "notifications": [
+    {
+      "id": "done",
+      "label": "Transcription finished",
+      "labelKey": "plugin.transcribe.notification.done",
+      "description": "A run takes minutes with the app in the background, which is where a toast would land unseen.",
+      "descriptionKey": "plugin.transcribe.notification.doneDesc",
+      "defaultChannel": "system"
+    },
+    {
+      "id": "failed",
+      "label": "Transcription failed",
+      "labelKey": "plugin.transcribe.notification.failed",
+      "description": "Announces a run that ended with an error, with the reason.",
+      "descriptionKey": "plugin.transcribe.notification.failedDesc",
+      "defaultChannel": "system"
+    }
+  ],
+  "settingsView": "transcribe.settings",
+  "settingsSchema": {
+    "fields": [
+      {
+        "key": "model",
+        "label": "Whisper model",
+        "labelKey": "plugin.transcribe.field.model",
+        "type": "select",
+        "default": "small",
+        "options": [
+          {
+            "value": "tiny",
+            "label": "Tiny — 75 MB, fastest",
+            "labelKey": "plugin.transcribe.model.tiny"
+          },
+          {
+            "value": "base",
+            "label": "Base — 142 MB",
+            "labelKey": "plugin.transcribe.model.base"
+          },
+          {
+            "value": "small",
+            "label": "Small — 466 MB, balanced",
+            "labelKey": "plugin.transcribe.model.small"
+          },
+          {
+            "value": "medium",
+            "label": "Medium — 1.5 GB",
+            "labelKey": "plugin.transcribe.model.medium"
+          },
+          {
+            "value": "large-v3",
+            "label": "Large — 2.9 GB, most accurate",
+            "labelKey": "plugin.transcribe.model.large"
+          },
+          {
+            "value": "turbo",
+            "label": "Turbo — 1.6 GB, large quality at speed",
+            "labelKey": "plugin.transcribe.model.turbo"
+          }
+        ],
+        "description": "Bigger models are more accurate and slower. Weights download once, on first use.",
+        "descriptionKey": "auto.59255cad3760"
+      },
+      {
+        "key": "language",
+        "label": "Spoken language",
+        "labelKey": "plugin.transcribe.field.language",
+        "type": "select",
+        "default": "",
+        "options": [
+          {
+            "label": "Auto-detect",
+            "labelKey": "plugin.transcribe.opt.auto",
+            "value": ""
+          },
+          {
+            "label": "Afrikaans — Afrikaans",
+            "labelKey": "auto.94da2a9e1a19",
+            "value": "af"
+          },
+          {
+            "label": "Shqip — Albanian",
+            "labelKey": "auto.948081d2aa96",
+            "value": "sq"
+          },
+          {
+            "label": "አማርኛ — Amharic",
+            "labelKey": "auto.dea18cbf2f93",
+            "value": "am"
+          },
+          {
+            "label": "العربية — Arabic",
+            "labelKey": "auto.991496802d50",
+            "value": "ar"
+          },
+          {
+            "label": "Հայերեն — Armenian",
+            "labelKey": "auto.be89c07db172",
+            "value": "hy"
+          },
+          {
+            "label": "অসমীয়া — Assamese",
+            "labelKey": "auto.e0fd1a956dd8",
+            "value": "as"
+          },
+          {
+            "label": "Azərbaycanca — Azerbaijani",
+            "labelKey": "auto.2182ed230c42",
+            "value": "az"
+          },
+          {
+            "label": "Башҡортса — Bashkir",
+            "labelKey": "auto.f9cedf1f0f0e",
+            "value": "ba"
+          },
+          {
+            "label": "Euskara — Basque",
+            "labelKey": "auto.8a70d3aca5c9",
+            "value": "eu"
+          },
+          {
+            "label": "Беларуская — Belarusian",
+            "labelKey": "auto.0be7895e3b48",
+            "value": "be"
+          },
+          {
+            "label": "বাংলা — Bengali",
+            "labelKey": "auto.1c91cd28c82c",
+            "value": "bn"
+          },
+          {
+            "label": "Bosanski — Bosnian",
+            "labelKey": "auto.8281c389e865",
+            "value": "bs"
+          },
+          {
+            "label": "Brezhoneg — Breton",
+            "labelKey": "auto.fc07de033562",
+            "value": "br"
+          },
+          {
+            "label": "Български — Bulgarian",
+            "labelKey": "auto.a59fa1a34fd2",
+            "value": "bg"
+          },
+          {
+            "label": "မြန်မာ — Burmese",
+            "labelKey": "auto.69628c9f49c2",
+            "value": "my"
+          },
+          {
+            "label": "粵語 — Cantonese",
+            "labelKey": "auto.3c2b216a7926",
+            "value": "yue"
+          },
+          {
+            "label": "Català — Catalan",
+            "labelKey": "auto.e535427618a4",
+            "value": "ca"
+          },
+          {
+            "label": "中文 — Chinese",
+            "labelKey": "auto.9aeb9801bab4",
+            "value": "zh"
+          },
+          {
+            "label": "Hrvatski — Croatian",
+            "labelKey": "auto.635a0028eeb1",
+            "value": "hr"
+          },
+          {
+            "label": "Čeština — Czech",
+            "labelKey": "auto.d7a63c82e054",
+            "value": "cs"
+          },
+          {
+            "label": "Dansk — Danish",
+            "labelKey": "auto.c6ce3eea2e0d",
+            "value": "da"
+          },
+          {
+            "label": "Nederlands — Dutch",
+            "labelKey": "auto.22a65746e94b",
+            "value": "nl"
+          },
+          {
+            "label": "English — English",
+            "labelKey": "auto.046e311793fc",
+            "value": "en"
+          },
+          {
+            "label": "Eesti — Estonian",
+            "labelKey": "auto.30033d8f565b",
+            "value": "et"
+          },
+          {
+            "label": "Føroyskt — Faroese",
+            "labelKey": "auto.ee55334946c5",
+            "value": "fo"
+          },
+          {
+            "label": "Suomi — Finnish",
+            "labelKey": "auto.cffe5214a887",
+            "value": "fi"
+          },
+          {
+            "label": "Français — French",
+            "labelKey": "auto.ba510d6f5ee4",
+            "value": "fr"
+          },
+          {
+            "label": "Galego — Galician",
+            "labelKey": "auto.a3624867d19b",
+            "value": "gl"
+          },
+          {
+            "label": "ქართული — Georgian",
+            "labelKey": "auto.cdb137fcb255",
+            "value": "ka"
+          },
+          {
+            "label": "Deutsch — German",
+            "labelKey": "auto.d54ab41021bb",
+            "value": "de"
+          },
+          {
+            "label": "Ελληνικά — Greek",
+            "labelKey": "auto.ae45f1fe9920",
+            "value": "el"
+          },
+          {
+            "label": "ગુજરાતી — Gujarati",
+            "labelKey": "auto.3c1aca5accaf",
+            "value": "gu"
+          },
+          {
+            "label": "Kreyòl ayisyen — Haitian Creole",
+            "labelKey": "auto.10febbfd2aa3",
+            "value": "ht"
+          },
+          {
+            "label": "Hausa — Hausa",
+            "labelKey": "auto.e14fb762c969",
+            "value": "ha"
+          },
+          {
+            "label": "ʻŌlelo Hawaiʻi — Hawaiian",
+            "labelKey": "auto.7c3f1863e218",
+            "value": "haw"
+          },
+          {
+            "label": "עברית — Hebrew",
+            "labelKey": "auto.140405a8f397",
+            "value": "he"
+          },
+          {
+            "label": "हिन्दी — Hindi",
+            "labelKey": "auto.3a2757f217fb",
+            "value": "hi"
+          },
+          {
+            "label": "Magyar — Hungarian",
+            "labelKey": "auto.2b96a46c00c2",
+            "value": "hu"
+          },
+          {
+            "label": "Íslenska — Icelandic",
+            "labelKey": "auto.68969d9da6aa",
+            "value": "is"
+          },
+          {
+            "label": "Bahasa Indonesia — Indonesian",
+            "labelKey": "auto.141d2afe1ece",
+            "value": "id"
+          },
+          {
+            "label": "Italiano — Italian",
+            "labelKey": "auto.99d4b4dc5597",
+            "value": "it"
+          },
+          {
+            "label": "日本語 — Japanese",
+            "labelKey": "auto.48e51e6044ba",
+            "value": "ja"
+          },
+          {
+            "label": "Basa Jawa — Javanese",
+            "labelKey": "auto.e3e60968ec32",
+            "value": "jw"
+          },
+          {
+            "label": "ಕನ್ನಡ — Kannada",
+            "labelKey": "auto.cdf2533b3e68",
+            "value": "kn"
+          },
+          {
+            "label": "Қазақша — Kazakh",
+            "labelKey": "auto.ddb01138818a",
+            "value": "kk"
+          },
+          {
+            "label": "ភាសាខ្មែរ — Khmer",
+            "labelKey": "auto.0bffa871a1fd",
+            "value": "km"
+          },
+          {
+            "label": "한국어 — Korean",
+            "labelKey": "auto.9b2f7ce0f90d",
+            "value": "ko"
+          },
+          {
+            "label": "ລາວ — Lao",
+            "labelKey": "auto.79dc840dd96d",
+            "value": "lo"
+          },
+          {
+            "label": "Latina — Latin",
+            "labelKey": "auto.a5245ddb303b",
+            "value": "la"
+          },
+          {
+            "label": "Latviešu — Latvian",
+            "labelKey": "auto.897358255c66",
+            "value": "lv"
+          },
+          {
+            "label": "Lingála — Lingala",
+            "labelKey": "auto.5d5e9aca1277",
+            "value": "ln"
+          },
+          {
+            "label": "Lietuvių — Lithuanian",
+            "labelKey": "auto.94328acf7acf",
+            "value": "lt"
+          },
+          {
+            "label": "Lëtzebuergesch — Luxembourgish",
+            "labelKey": "auto.006e5af6979a",
+            "value": "lb"
+          },
+          {
+            "label": "Македонски — Macedonian",
+            "labelKey": "auto.c1d9d677a4a6",
+            "value": "mk"
+          },
+          {
+            "label": "Malagasy — Malagasy",
+            "labelKey": "auto.8444c76d451d",
+            "value": "mg"
+          },
+          {
+            "label": "Bahasa Melayu — Malay",
+            "labelKey": "auto.a084cce680a1",
+            "value": "ms"
+          },
+          {
+            "label": "മലയാളം — Malayalam",
+            "labelKey": "auto.960701ee27c9",
+            "value": "ml"
+          },
+          {
+            "label": "Malti — Maltese",
+            "labelKey": "auto.8e2f0a25d6d9",
+            "value": "mt"
+          },
+          {
+            "label": "Te Reo Māori — Maori",
+            "labelKey": "auto.899b372091ae",
+            "value": "mi"
+          },
+          {
+            "label": "मराठी — Marathi",
+            "labelKey": "auto.9cbce0b354cc",
+            "value": "mr"
+          },
+          {
+            "label": "Монгол — Mongolian",
+            "labelKey": "auto.820d1dd40191",
+            "value": "mn"
+          },
+          {
+            "label": "नेपाली — Nepali",
+            "labelKey": "auto.a527b39b60d8",
+            "value": "ne"
+          },
+          {
+            "label": "Norsk — Norwegian",
+            "labelKey": "auto.329066618bb3",
+            "value": "no"
+          },
+          {
+            "label": "Nynorsk — Norwegian Nynorsk",
+            "labelKey": "auto.43a90581768c",
+            "value": "nn"
+          },
+          {
+            "label": "Occitan — Occitan",
+            "labelKey": "auto.6e8635424293",
+            "value": "oc"
+          },
+          {
+            "label": "پښتو — Pashto",
+            "labelKey": "auto.6141fa95cf5d",
+            "value": "ps"
+          },
+          {
+            "label": "فارسی — Persian",
+            "labelKey": "auto.c225df39c7d8",
+            "value": "fa"
+          },
+          {
+            "label": "Polski — Polish",
+            "labelKey": "auto.f401216a0ce6",
+            "value": "pl"
+          },
+          {
+            "label": "Português — Portuguese",
+            "labelKey": "auto.4204202240ac",
+            "value": "pt"
+          },
+          {
+            "label": "ਪੰਜਾਬੀ — Punjabi",
+            "labelKey": "auto.232753ff3d2d",
+            "value": "pa"
+          },
+          {
+            "label": "Română — Romanian",
+            "labelKey": "auto.f4ba3c252a65",
+            "value": "ro"
+          },
+          {
+            "label": "Русский — Russian",
+            "labelKey": "auto.3558737996c8",
+            "value": "ru"
+          },
+          {
+            "label": "संस्कृतम् — Sanskrit",
+            "labelKey": "auto.653793cf4c18",
+            "value": "sa"
+          },
+          {
+            "label": "Српски — Serbian",
+            "labelKey": "auto.714430945d96",
+            "value": "sr"
+          },
+          {
+            "label": "ChiShona — Shona",
+            "labelKey": "auto.63a4004ed42b",
+            "value": "sn"
+          },
+          {
+            "label": "سنڌي — Sindhi",
+            "labelKey": "auto.53eecb37d339",
+            "value": "sd"
+          },
+          {
+            "label": "සිංහල — Sinhala",
+            "labelKey": "auto.26a2ddd157af",
+            "value": "si"
+          },
+          {
+            "label": "Slovenčina — Slovak",
+            "labelKey": "auto.d3542a1e64d5",
+            "value": "sk"
+          },
+          {
+            "label": "Slovenščina — Slovenian",
+            "labelKey": "auto.6097825f4fb8",
+            "value": "sl"
+          },
+          {
+            "label": "Soomaali — Somali",
+            "labelKey": "auto.598e38a43711",
+            "value": "so"
+          },
+          {
+            "label": "Español — Spanish",
+            "labelKey": "auto.b062063b84fb",
+            "value": "es"
+          },
+          {
+            "label": "Basa Sunda — Sundanese",
+            "labelKey": "auto.1ca969c4266e",
+            "value": "su"
+          },
+          {
+            "label": "Kiswahili — Swahili",
+            "labelKey": "auto.2bbed5e7f056",
+            "value": "sw"
+          },
+          {
+            "label": "Svenska — Swedish",
+            "labelKey": "auto.5b2f968c8e2d",
+            "value": "sv"
+          },
+          {
+            "label": "Tagalog — Tagalog",
+            "labelKey": "auto.a743f4fa47f3",
+            "value": "tl"
+          },
+          {
+            "label": "Тоҷикӣ — Tajik",
+            "labelKey": "auto.473d869fbf62",
+            "value": "tg"
+          },
+          {
+            "label": "தமிழ் — Tamil",
+            "labelKey": "auto.a86cec697777",
+            "value": "ta"
+          },
+          {
+            "label": "Татарча — Tatar",
+            "labelKey": "auto.578194364494",
+            "value": "tt"
+          },
+          {
+            "label": "తెలుగు — Telugu",
+            "labelKey": "auto.f523b5659088",
+            "value": "te"
+          },
+          {
+            "label": "ไทย — Thai",
+            "labelKey": "auto.e3a06c08ef2e",
+            "value": "th"
+          },
+          {
+            "label": "བོད་སྐད — Tibetan",
+            "labelKey": "auto.8cd849faac13",
+            "value": "bo"
+          },
+          {
+            "label": "Türkçe — Turkish",
+            "labelKey": "auto.c294514ffb9b",
+            "value": "tr"
+          },
+          {
+            "label": "Türkmençe — Turkmen",
+            "labelKey": "auto.8c3d299e8373",
+            "value": "tk"
+          },
+          {
+            "label": "Українська — Ukrainian",
+            "labelKey": "auto.b1ac1fbd6d58",
+            "value": "uk"
+          },
+          {
+            "label": "اردو — Urdu",
+            "labelKey": "auto.2aa1bf89b171",
+            "value": "ur"
+          },
+          {
+            "label": "Oʻzbekcha — Uzbek",
+            "labelKey": "auto.b6bd3765321a",
+            "value": "uz"
+          },
+          {
+            "label": "Tiếng Việt — Vietnamese",
+            "labelKey": "auto.1dcd7ef6381c",
+            "value": "vi"
+          },
+          {
+            "label": "Cymraeg — Welsh",
+            "labelKey": "auto.1cdf7ed37821",
+            "value": "cy"
+          },
+          {
+            "label": "ייִדיש — Yiddish",
+            "labelKey": "auto.7d8929c6be7d",
+            "value": "yi"
+          },
+          {
+            "label": "Yorùbá — Yoruba",
+            "labelKey": "auto.1e6eab9ee0a8",
+            "value": "yo"
+          }
+        ],
+        "description": "Naming the language skips detection and improves accuracy, especially on the smaller models.",
+        "descriptionKey": "auto.babd6082ae47"
+      },
+      {
+        "key": "whisperPath",
+        "label": "Whisper executable",
+        "labelKey": "plugin.transcribe.field.binPath",
+        "type": "text",
+        "default": "",
+        "description": "Leave blank to find it automatically. Set this if Whisper is installed somewhere unusual.",
+        "descriptionKey": "auto.6ddc46363701"
+      }
+    ]
+  },
+  "locales": {
+    "en": "runtime/locales/en.json",
+    "de": "runtime/locales/de.json",
+    "es": "runtime/locales/es.json",
+    "fr": "runtime/locales/fr.json",
+    "zh-CN": "runtime/locales/zh-CN.json"
+  },
+  "runtime": {
+    "ui": "runtime/index.js",
+    "backend": "runtime/backend.js"
+  },
+  "permissions": {
+    "nativeTools": [
+      "whisper",
+      "ffmpeg"
+    ],
+    "network": {
+      "hosts": [
+        "openaipublic.azureedge.net",
+        "api.openai.com"
+      ],
+      "allowUserEndpoints": true
+    },
+    "accounts": [
+      "ai.transcribe"
+    ],
+    "storage": {
+      "vault": true
+    }
+  },
+  "connectionProviders": [
+    {
+      "id": "openai",
+      "name": "OpenAI",
+      "description": "OpenAI chat and transcription provider",
+      "icon": "openai",
+      "baseUrl": "https://api.openai.com/v1",
+      "capabilities": [
+        "ai.chat",
+        "ai.stream",
+        "ai.tools",
+        "ai.models",
+        "ai.vision-image",
+        "ai.transcribe",
+        "ai.embeddings"
+      ],
+      "requiresKey": true,
+      "environmentKeys": [
+        "OPENAI_API_KEY"
+      ],
+      "connectionSource": {
+        "config": ".valley/assistant/assistant.json",
+        "secrets": ".valley/assistant/provider-secrets.json",
+        "keyPrefix": "provider:"
+      }
+    }
+  ]
+}
