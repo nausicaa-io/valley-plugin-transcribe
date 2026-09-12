@@ -1,5 +1,55 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+import type { ValleyPluginManifest } from '@valley/plugin-sdk/types'
+import { createMockValleyApi } from './harness'
+import { initRuntime } from '../src/runtime'
+import { createTranscriptSearchCard } from '../src/TranscriptView'
+import config from '../config.json'
 import { highlightPieces, matchRanges, searchLines } from '../src/search'
+
+afterEach(cleanup)
+
+describe('vault transcript search', () => {
+  const parent = { id: 'lecture', file: 'Research/Lecture.mp3', fileHash: 'hash', language: 'de', createdAt: '2026-09-10T10:00:00.000Z' }
+  const segment = { transcriptionId: 'lecture', position: 8, segmentId: 'hash:8', start: 125.5, end: 134, text: 'Impulserhaltung im geschlossenen System' }
+
+  function setup() {
+    const mock = createMockValleyApi({ manifest: { ...config, id: 'transcribe' } as unknown as ValleyPluginManifest, files: { [parent.file]: 'media' } })
+    mock.datasets.set('transcribe.transcriptions', [parent])
+    mock.datasets.set('transcribe.transcript_segments', [segment])
+    initRuntime(mock.api)
+    return { mock, card: createTranscriptSearchCard(mock.api) }
+  }
+
+  it('declares every segment as searchable text with its parent media path and owning card', () => {
+    const [source] = config.searchSources
+    expect(source).toMatchObject({ id: 'transcript', source: 'dataset', dataset: 'transcribe.transcript_segments', fields: ['text'], default: true, pathField: 'file', cardKind: 'transcript-segment' })
+    expect(source.joins).toEqual([{ dataset: 'transcribe.transcriptions', baseColumns: ['transcriptionId'], relatedColumns: ['id'], valueColumn: 'file', as: 'file', cardinality: 'one' }])
+    expect(config.datasets.find((dataset) => `transcribe.${dataset.id}` === source.dataset)?.columns).toHaveProperty('text')
+  })
+
+  it('renders the matched words and timecode from the indexed segment', () => {
+    const { card } = setup()
+    render(card.render(segment, { title: 'Lecture.mp3', tags: [], path: parent.file, compact: true, onOpen: () => {} }))
+    expect(screen.getByText(segment.text)).toBeInTheDocument()
+    expect(screen.getByText('Lecture.mp3')).toBeInTheDocument()
+    expect(screen.getByText('2:05')).toBeInTheDocument()
+  })
+
+  it('resolves the current segment and honors opening the media in a new tab', async () => {
+    const { mock, card } = setup()
+    await mock.api.data.dataset('transcribe.transcript_segments').update({ transcriptionId: 'lecture', position: 8 }, { start: 150 })
+    expect(await card.open(segment, { path: 'Stale.mp3', newTab: true })).toBe(true)
+    expect(mock.api.workspace.openFile).toHaveBeenCalledWith(parent.file, { type: 'media-time', seconds: 150 }, { newTab: true })
+  })
+
+  it('does not seek from stale records after the segment has been removed', async () => {
+    const { mock, card } = setup()
+    await mock.api.data.dataset('transcribe.transcript_segments').delete({ transcriptionId: 'lecture', position: 8 })
+    expect(await card.open(segment, { path: parent.file })).toBe(false)
+    expect(mock.api.workspace.openFile).not.toHaveBeenCalled()
+  })
+})
 
 describe('matchRanges', () => {
   it('finds every occurrence, ignoring case', () => {

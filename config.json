@@ -115,6 +115,31 @@
       "titleKey": "auto.c19cabc4a949"
     }
   ],
+  "searchSources": [
+    {
+      "id": "transcript",
+      "label": "Transcript",
+      "labelKey": "transcribe.title",
+      "source": "dataset",
+      "dataset": "transcribe.transcript_segments",
+      "fields": ["text"],
+      "mode": "keyword",
+      "default": true,
+      "display": ["file"],
+      "pathField": "file",
+      "cardKind": "transcript-segment",
+      "joins": [
+        {
+          "dataset": "transcribe.transcriptions",
+          "cardinality": "one",
+          "baseColumns": ["transcriptionId"],
+          "relatedColumns": ["id"],
+          "valueColumn": "file",
+          "as": "file"
+        }
+      ]
+    }
+  ],
   "pathRefs": [
     {
       "source": "dataset",
@@ -123,6 +148,11 @@
     }
   ],
   "provides": [
+    {
+      "id": "search.resultCard",
+      "kind": "extension",
+      "version": "1.0.0"
+    },
     {
       "id": "metadataPanel.segment",
       "kind": "extension",

@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   FILE_TREE_CONTEXT_ITEM_V1,
   PLUGIN_SURFACE_V1,
-  METADATA_PANEL_SEGMENT_V1
+  METADATA_PANEL_SEGMENT_V1,
+  SEARCH_RESULT_CARD_V1
 } from '@valley/plugin-sdk'
 import { createMockValleyApi } from './harness'
 import { register } from '../src/index'
@@ -86,9 +87,11 @@ describe('register', () => {
   it('takes everything back down on dispose', () => {
     const { api } = setup()
     const dispose = register(api)
+    expect(api.interop.extensions.providers(SEARCH_RESULT_CARD_V1).map(({ extension }) => extension.cardKind)).toEqual(['transcript-segment'])
     dispose()
     expect(api.interop.extensions.providers(METADATA_PANEL_SEGMENT_V1)).toHaveLength(0)
     expect(api.interop.extensions.providers(FILE_TREE_CONTEXT_ITEM_V1)).toHaveLength(0)
+    expect(api.interop.extensions.providers(SEARCH_RESULT_CARD_V1)).toHaveLength(0)
     expect(api.commands.list()).toHaveLength(0)
   })
 })
@@ -96,6 +99,7 @@ describe('register', () => {
 describe('manifest', () => {
   it('declares what it contributes and the dataset path it repairs', () => {
     expect(TRANSCRIBE_PLUGIN_CONFIG.provides.map((claim) => claim.id)).toEqual([
+      'search.resultCard',
       'metadataPanel.segment',
       'fileTree.contextItem',
       'workspace.surface'

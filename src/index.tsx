@@ -1,5 +1,5 @@
 import type { FileTreeContextItem, ValleyPluginApi, ValleyPluginModule } from '@valley/plugin-sdk'
-import { FILE_TREE_CONTEXT_ITEM_V1, METADATA_PANEL_SEGMENT_V1 } from '@valley/plugin-sdk'
+import { FILE_TREE_CONTEXT_ITEM_V1, METADATA_PANEL_SEGMENT_V1, SEARCH_RESULT_CARD_V1 } from '@valley/plugin-sdk'
 import type { TranscriptSegment } from './serviceClient'
 import { initRuntime, React } from './runtime'
 import { initLocalization } from './localization'
@@ -7,7 +7,7 @@ import { transcribePanelSegment } from './metadata'
 import { FooterProgress } from './FooterProgress'
 import { renderMetadataSegment } from './MetadataSegment'
 import { SettingsView } from './SettingsView'
-import { TranscriptView } from './TranscriptView'
+import { createTranscriptSearchCard, TranscriptView } from './TranscriptView'
 import {
   cancelJob,
   transcribeJobs,
@@ -65,6 +65,7 @@ export function register(api: ValleyPluginApi): () => void {
   const disposeStyles = injectStyles()
   const offJobs = initJobs()
   const offSurfaces = registerTranscriptSurfaces(api)
+  const offSearch = api.interop.extensions.provide(SEARCH_RESULT_CARD_V1, createTranscriptSearchCard(api))
 
   const usage = 'transcribe file <vault-relative-file> [--model <model>] [--language <code>]'
 
@@ -177,6 +178,7 @@ export function register(api: ValleyPluginApi): () => void {
     offFinished()
     offJobs()
     offSurfaces()
+    offSearch()
     disposeStyles()
   }
 }
