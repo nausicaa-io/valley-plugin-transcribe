@@ -7,7 +7,7 @@
  * output an `update()` would leave the whole stale tail behind, silently
  * doubling the transcript.
  */
-import type { DatasetRecord } from '@valley/plugin-sdk'
+import type { DatasetRecord, ValleyPluginApi } from '@valley/plugin-sdk'
 import type { TranscriptSegment } from './serviceClient'
 import { api } from './runtime'
 import { normalizeFollowPosition, type FollowPosition } from './follow'
@@ -26,21 +26,21 @@ export interface TranscribeSettings {
   whisperPath: string
 }
 
-async function allRows(dataset: string): Promise<DatasetRecord[]> {
+async function allRows(owner: ValleyPluginApi, dataset: string): Promise<DatasetRecord[]> {
   const rows: DatasetRecord[] = []
   let cursor: string | undefined
   do {
-    const page = await api.data.dataset(dataset).query({ limit: 1000, cursor })
+    const page = await owner.data.dataset(dataset).query({ limit: 1000, cursor })
     rows.push(...page.rows)
     cursor = page.cursor
   } while (cursor)
   return rows
 }
 
-export function onChanged(listener: () => void): () => void {
-  const offTranscriptions = api.data.dataset(TRANSCRIPTIONS_DATASET).subscribe(listener)
-  const offSegments = api.data.dataset(SEGMENTS_DATASET).subscribe(listener)
-  const offSettings = api.settings.subscribe(listener)
+export function onChanged(listener: () => void, owner = api): () => void {
+  const offTranscriptions = owner.data.dataset(TRANSCRIPTIONS_DATASET).subscribe(listener)
+  const offSegments = owner.data.dataset(SEGMENTS_DATASET).subscribe(listener)
+  const offSettings = owner.settings.subscribe(listener)
   return () => {
     offTranscriptions()
     offSegments()
@@ -53,25 +53,25 @@ interface SegmentLoadState {
   revision: number
 }
 
-function segmentLoadState(): SegmentLoadState {
-  return api.runtime.getOrCreate('transcribe.segmentLoad', () => {
+function segmentLoadState(owner: ValleyPluginApi): SegmentLoadState {
+  return owner.runtime.getOrCreate('transcribe.segmentLoad', () => {
     const state: SegmentLoadState = { pending: null, revision: 0 }
     const invalidate = (): void => { state.revision += 1 }
-    api.data.dataset(TRANSCRIPTIONS_DATASET).subscribe(invalidate)
-    api.data.dataset(SEGMENTS_DATASET).subscribe(invalidate)
+    owner.data.dataset(TRANSCRIPTIONS_DATASET).subscribe(invalidate)
+    owner.data.dataset(SEGMENTS_DATASET).subscribe(invalidate)
     return state
   })
 }
 
-export function loadSegments(): Promise<TranscriptSegment[]> {
-  const state = segmentLoadState()
+export function loadSegments(owner = api): Promise<TranscriptSegment[]> {
+  const state = segmentLoadState(owner)
   if (state.pending) return state.pending
   const pending = (async () => {
     let revision: number
     let segments: TranscriptSegment[]
     do {
       revision = state.revision
-      segments = await readSegments()
+      segments = await readSegments(owner)
     } while (revision !== state.revision)
     return segments
   })()
@@ -81,10 +81,10 @@ export function loadSegments(): Promise<TranscriptSegment[]> {
   return pending
 }
 
-async function readSegments(): Promise<TranscriptSegment[]> {
+async function readSegments(owner: ValleyPluginApi): Promise<TranscriptSegment[]> {
   const [transcriptions, segments] = await Promise.all([
-    allRows(TRANSCRIPTIONS_DATASET),
-    allRows(SEGMENTS_DATASET)
+    allRows(owner, TRANSCRIPTIONS_DATASET),
+    allRows(owner, SEGMENTS_DATASET)
   ])
   const parents = new Map(transcriptions.map((row) => [String(row.id), row]))
   return segments.flatMap((segment) => {
@@ -110,8 +110,8 @@ async function readSegments(): Promise<TranscriptSegment[]> {
 }
 
 /** One file's transcript, in playback order. */
-export async function segmentsForFile(relPath: string): Promise<TranscriptSegment[]> {
-  const all = await loadSegments()
+export async function segmentsForFile(relPath: string, owner = api): Promise<TranscriptSegment[]> {
+  const all = await loadSegments(owner)
   return all.filter((segment) => segment.file === relPath).sort((a, b) => a.start - b.start)
 }
 
@@ -124,19 +124,20 @@ export async function segmentsForFile(relPath: string): Promise<TranscriptSegmen
  */
 export async function replaceFileSegments(
   relPath: string,
-  next: TranscriptSegment[]
+  next: TranscriptSegment[],
+  owner = api
 ): Promise<{ ok: boolean; previous: TranscriptSegment[] }> {
-  const previous = await segmentsForFile(relPath)
+  const previous = await segmentsForFile(relPath, owner)
   try {
-    const current = await api.data.dataset(TRANSCRIPTIONS_DATASET).query({ where: { file: relPath }, limit: 1 })
+    const current = await owner.data.dataset(TRANSCRIPTIONS_DATASET).query({ where: { file: relPath }, limit: 1 })
     const currentId = typeof current.rows[0]?.id === 'string' ? current.rows[0].id : null
     if (!next.length) {
-      if (currentId) await api.data.dataset(TRANSCRIPTIONS_DATASET).delete({ id: currentId })
+      if (currentId) await owner.data.dataset(TRANSCRIPTIONS_DATASET).delete({ id: currentId })
       return { ok: true, previous }
     }
     const first = next[0]
     const transcriptionId = first.fileHash
-    await api.data.transaction([
+    await owner.data.transaction([
       ...(currentId ? [{ dataset: TRANSCRIPTIONS_DATASET, operation: 'delete' as const, key: { id: currentId } }] : []),
       {
         dataset: TRANSCRIPTIONS_DATASET,
@@ -151,18 +152,18 @@ export async function replaceFileSegments(
           createdAt: first.createdAt
         }
       },
-      ...next.map((segment, position) => ({
+      {
         dataset: SEGMENTS_DATASET,
-        operation: 'insert' as const,
-        values: {
+        operation: 'insert',
+        values: next.map((segment, position) => ({
           transcriptionId,
           position,
           segmentId: segment.id,
           start: segment.start,
           end: segment.end,
           text: segment.text
-        }
-      }))
+        }))
+      }
     ])
     return { ok: true, previous }
   } catch {
@@ -170,8 +171,8 @@ export async function replaceFileSegments(
   }
 }
 
-export function readSettings(): TranscribeSettings {
-  const raw = api.settings.get()
+export function readSettings(owner = api): TranscribeSettings {
+  const raw = owner.settings.get()
   return {
     engine: raw.engine === 'openai' ? 'openai' : 'local',
     openAiConnectionId: typeof raw.openAiConnectionId === 'string' ? raw.openAiConnectionId : '',
@@ -184,8 +185,8 @@ export function readSettings(): TranscribeSettings {
   }
 }
 
-export async function writeSetting(key: keyof TranscribeSettings, value: unknown): Promise<void> {
-  const result = await api.settings.set(key, value)
+export async function writeSetting(key: keyof TranscribeSettings, value: unknown, owner = api): Promise<void> {
+  const result = await owner.settings.set(key, value)
   if (!result.ok) throw new Error(result.error ?? 'Could not save transcription settings.')
 }
 

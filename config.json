@@ -1,6 +1,7 @@
 {
   "icon": "text-align-left",
   "main": "runtime/index.js",
+  "indexState": "scoped",
   "uiSlots": {
     "right_sidebar": "transcribe.file",
     "main_workspace": "transcribe.page",

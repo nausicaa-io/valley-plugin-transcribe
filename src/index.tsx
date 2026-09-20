@@ -59,11 +59,11 @@ function commandInput(usage: string): {
   }
 }
 
-export function register(api: ValleyPluginApi): () => void {
+export function register(api: ValleyPluginApi): () => Promise<void> {
   initLocalization(api)
   initRuntime(api)
   const disposeStyles = injectStyles()
-  const offJobs = initJobs()
+  const offJobs = initJobs(api)
   const offSurfaces = registerTranscriptSurfaces(api)
   const offSearch = api.interop.extensions.provide(SEARCH_RESULT_CARD_V1, createTranscriptSearchCard(api))
 
@@ -77,8 +77,9 @@ export function register(api: ValleyPluginApi): () => void {
       sideEffect: 'write',
       usage,
       input: commandInput(usage),
-      run: async (input) => {
-      const settings = readSettings()
+      run: async (input, context) => {
+      const owner = context.operation ? api.forOperation(context.operation) : api
+      const settings = readSettings(owner)
       // The same helper the panel button runs — one engine call, one write, so
       // the palette/CLI/assistant path and the human one cannot diverge. A
       // re-run replaces the file's transcript wholesale, so `previous` is what
@@ -91,18 +92,20 @@ export function register(api: ValleyPluginApi): () => void {
         language: input.language ?? settings.language,
         jobId: input.jobId,
         durationMs: input.durationMs
-      })
+      }, owner)
       return {
         value: segments,
         revert: {
           label: `Transcribe ${input.file}`,
-          run: async () => {
-            if (!(await replaceFileSegments(input.file, previous)).ok) {
+          run: async (context) => {
+            const owner = context.operation ? api.forOperation(context.operation) : api
+            if (!(await replaceFileSegments(input.file, previous, owner)).ok) {
               throw new Error('Could not remove the transcript segments.')
             }
           },
-          reapply: async () => {
-            if (!(await replaceFileSegments(input.file, segments)).ok) {
+          reapply: async (context) => {
+            const owner = context.operation ? api.forOperation(context.operation) : api
+            if (!(await replaceFileSegments(input.file, segments, owner)).ok) {
               throw new Error('Could not restore the transcript segments.')
             }
           }
@@ -113,20 +116,20 @@ export function register(api: ValleyPluginApi): () => void {
       const segments = value as TranscriptSegment[]
       return segments.map((segment) => segment.text).join(' ')
     },
-      revision: async (input) => ({ file: await api.vault.fileInfo(input.file), segments: await segmentsForFile(input.file), settings: readSettings() }),
+      revision: async (input) => ({ file: await api.vault.fileInfo(input.file), segments: await segmentsForFile(input.file, api), settings: readSettings(api) }),
       preview: (input) => ({
       action: 'transcribe-file',
       file: input.file,
-      model: knownModel(input.model ?? readSettings().model),
-      language: input.language ?? readSettings().language ?? null
+      model: knownModel(input.model ?? readSettings(api).model),
+      language: input.language ?? readSettings(api).language ?? null
     })
     })
 
   const fileInput = { schema: { type: 'object', properties: { file: { type: 'string', minLength: 1 } }, required: ['file'], additionalProperties: false }, parse: (raw: unknown) => { const file = (raw as Record<string, unknown>)?.file; if (typeof file !== 'string' || !file.trim()) throw new Error('Expected a media file path.'); return { file } } }
   const extraCommands = [
-    api.commands.register({ id: 'list', label: 'Transcribe: List transcripts', labelKey: 'transcribe.command.list', paletteSafe: false, sideEffect: 'read', input: { schema: { type: 'object', properties: { file: { type: 'string' }, query: { type: 'string' } }, additionalProperties: false }, parse: (raw) => { const input = (raw ?? {}) as Record<string, unknown>; for (const key of ['file', 'query']) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error('Expected transcript filter text.'); return { file: input.file as string | undefined, query: input.query as string | undefined } } }, run: async ({ file, query }) => (await loadSegments()).filter((segment) => (!file || segment.file === file) && (!query || segment.text.toLowerCase().includes(query.toLowerCase()))) }),
-    api.commands.register({ id: 'get', label: 'Transcribe: Read transcript', labelKey: 'transcribe.command.get', paletteSafe: false, sideEffect: 'read', input: fileInput, run: async ({ file }) => { if (!(await api.vault.fileInfo(file))) throw new Error('The media file no longer exists.'); return segmentsForFile(file) } }),
-    api.commands.register({ id: 'jobs', label: 'Transcribe: List jobs', labelKey: 'transcribe.command.jobs', paletteSafe: false, sideEffect: 'read', run: () => ({ jobs: transcribeJobs().jobs, errors: Object.fromEntries(transcribeJobs().errors) }) }),
+    api.commands.register({ id: 'list', label: 'Transcribe: List transcripts', labelKey: 'transcribe.command.list', paletteSafe: false, sideEffect: 'read', input: { schema: { type: 'object', properties: { file: { type: 'string' }, query: { type: 'string' } }, additionalProperties: false }, parse: (raw) => { const input = (raw ?? {}) as Record<string, unknown>; for (const key of ['file', 'query']) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error('Expected transcript filter text.'); return { file: input.file as string | undefined, query: input.query as string | undefined } } }, run: async ({ file, query }) => (await loadSegments(api)).filter((segment) => (!file || segment.file === file) && (!query || segment.text.toLowerCase().includes(query.toLowerCase()))) }),
+    api.commands.register({ id: 'get', label: 'Transcribe: Read transcript', labelKey: 'transcribe.command.get', paletteSafe: false, sideEffect: 'read', input: fileInput, run: async ({ file }) => { if (!(await api.vault.fileInfo(file))) throw new Error('The media file no longer exists.'); return segmentsForFile(file, api) } }),
+    api.commands.register({ id: 'jobs', label: 'Transcribe: List jobs', labelKey: 'transcribe.command.jobs', paletteSafe: false, sideEffect: 'read', run: () => ({ jobs: transcribeJobs(api).jobs, errors: Object.fromEntries(transcribeJobs(api).errors) }) }),
     api.commands.register({
       id: 'cancel',
       label: 'Transcribe: Cancel job',
@@ -134,11 +137,11 @@ export function register(api: ValleyPluginApi): () => void {
       paletteSafe: false,
       sideEffect: 'write',
       input: { schema: { type: 'object', properties: { jobId: { type: 'string', minLength: 1 } }, required: ['jobId'], additionalProperties: false }, parse: (raw) => { const jobId = (raw as Record<string, unknown>)?.jobId; if (typeof jobId !== 'string' || !jobId.trim()) throw new Error('Expected a transcription job id.'); return { jobId } } },
-      run: async ({ jobId }) => { if (!transcribeJobs().jobs.some((job) => job.jobId === jobId)) throw new Error('This transcription job is no longer running.'); if (!(await cancelJob(jobId))) throw new Error('Could not cancel the transcription job.'); return { value: { jobId }, revert: null } },
-      revision: ({ jobId }) => { const job = transcribeJobs().jobs.find((entry) => entry.jobId === jobId); return job ? { jobId, relPath: job.relPath, startedAt: job.startedAt, cancelling: !!job.cancelling } : null },
+      run: async ({ jobId }) => { if (!transcribeJobs(api).jobs.some((job) => job.jobId === jobId)) throw new Error('This transcription job is no longer running.'); if (!(await cancelJob(jobId, api))) throw new Error('Could not cancel the transcription job.'); return { value: { jobId }, revert: null } },
+      revision: ({ jobId }) => { const job = transcribeJobs(api).jobs.find((entry) => entry.jobId === jobId); return job ? { jobId, relPath: job.relPath, startedAt: job.startedAt, cancelling: !!job.cancelling } : null },
       preview: ({ jobId }) => ({ action: 'cancel-transcription', jobId })
     }),
-    api.commands.register({ id: 'open-segment', label: 'Transcribe: Open segment', labelKey: 'transcribe.command.openSegment', paletteSafe: false, sideEffect: 'read', input: { schema: { type: 'object', properties: { id: { type: 'string', minLength: 1 } }, required: ['id'], additionalProperties: false }, parse: (raw) => { const id = (raw as Record<string, unknown>)?.id; if (typeof id !== 'string' || !id.trim()) throw new Error('Expected a transcript segment id.'); return { id } } }, run: async ({ id }) => { const segment = (await loadSegments()).find((entry) => entry.id === id); if (!segment) throw new Error('The transcript segment no longer exists.'); if (!(await api.vault.fileInfo(segment.file))) throw new Error('The media file no longer exists.'); api.workspace.openFile(segment.file, { type: 'media-time', seconds: segment.start }); return segment } })
+    api.commands.register({ id: 'open-segment', label: 'Transcribe: Open segment', labelKey: 'transcribe.command.openSegment', paletteSafe: false, sideEffect: 'read', input: { schema: { type: 'object', properties: { id: { type: 'string', minLength: 1 } }, required: ['id'], additionalProperties: false }, parse: (raw) => { const id = (raw as Record<string, unknown>)?.id; if (typeof id !== 'string' || !id.trim()) throw new Error('Expected a transcript segment id.'); return { id } } }, run: async ({ id }) => { const segment = (await loadSegments(api)).find((entry) => entry.id === id); if (!segment) throw new Error('The transcript segment no longer exists.'); if (!(await api.vault.fileInfo(segment.file))) throw new Error('The media file no longer exists.'); api.workspace.openFile(segment.file, { type: 'media-time', seconds: segment.start }); return segment } })
   ]
 
   // Offer "Transcribe file…" on media files in the file tree. Core neither
@@ -153,7 +156,7 @@ export function register(api: ValleyPluginApi): () => void {
       // has no panel open, which is exactly the one that needs the footer chip
       // and the finished notification.
       run: (relPath: string) => {
-        void startTranscription({ relPath })
+        void startTranscription({ relPath }, api)
       }
     } satisfies FileTreeContextItem)
 
@@ -169,17 +172,20 @@ export function register(api: ValleyPluginApi): () => void {
     { ...transcribePanelSegment(({ relPath }) => (relPath ? renderMetadataSegment(relPath) : null)), inspect: ({ relPath }) => inspectTranscriptProperties(relPath) }
   )
 
-  const offFinished = startFinishedNotifications()
+  const offFinished = startFinishedNotifications(api)
+  let disposal: Promise<void> | undefined
   return () => {
+    if (disposal) return disposal
     offCommand()
     extraCommands.forEach((off) => off())
     offContextItem()
     offSegment()
     offFinished()
-    offJobs()
+    disposal = offJobs()
     offSurfaces()
     offSearch()
     disposeStyles()
+    return disposal
   }
 }
 

@@ -211,6 +211,7 @@
   "backend.read": "无法读取转录结果",
   "backend.file": "未找到文件。",
   "backend.running": "该转录已在运行。",
+  "backend.capacity": "已有四个转录任务正在运行。请等待其中一个完成。",
   "backend.engine": "未知的转录引擎",
   "backend.model": "未知的转录模型",
   "backend.cancelled": "转录已取消。",

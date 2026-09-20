@@ -43,8 +43,8 @@ export interface TranscribeInput {
 type Result<T> = { ok: boolean; data?: T; error?: string }
 function services(api: ValleyPluginApi) {
   return {
-    file: (file: string, opts?: TranscribeInput) => api.backend.call<Result<TranscriptSegment[]>>('file', { file, ...opts }),
-    cancel: (jobId: string) => api.backend.call<Result<{ cancelled: boolean }>>('cancel', { jobId }),
+    file: (file: string, opts?: TranscribeInput) => api.backend.callOperation<Result<TranscriptSegment[]>>('file', { file, ...opts }),
+    cancel: (jobId: string) => api.backend.callOperation<Result<{ cancelled: boolean }>>('cancel', { jobId }),
     status: (binPath?: string) => api.backend.call<Result<{ available: boolean; binPath: string | null; ffmpeg: boolean }>>('status', { binPath }),
     listConnections: () => api.backend.call<Result<{ connections: TranscribeConnection[] }>>('listConnections'),
     onProgress: (listener: (progress: TranscribeProgress) => void) => api.backend.on('progress', (event) => listener(event as TranscribeProgress))

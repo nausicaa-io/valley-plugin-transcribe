@@ -211,6 +211,7 @@
   "backend.read": "Impossible de lire le résultat de la transcription",
   "backend.file": "Fichier introuvable.",
   "backend.running": "Cette transcription est déjà en cours.",
+  "backend.capacity": "Quatre transcriptions sont déjà en cours. Attendez que l’une se termine.",
   "backend.engine": "Moteur de transcription inconnu",
   "backend.model": "Modèle de transcription inconnu",
   "backend.cancelled": "Transcription annulée.",

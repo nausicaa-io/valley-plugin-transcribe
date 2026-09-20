@@ -26,6 +26,7 @@ import { transcribeServices } from './serviceClient'
  */
 import type { TranscribeProgress } from './serviceClient'
 import type { TranscriptSegment } from './serviceClient'
+import type { ValleyPluginApi } from '@valley/plugin-sdk'
 import { api, React } from './runtime'
 import { formatTimecode } from './follow'
 import { uiText } from './localization'
@@ -70,6 +71,26 @@ const cancelling = new Set<string>()
 let ticker = 0
 let runCount = 0
 let offProgress: (() => void) | null = null
+let jobsApi: ValleyPluginApi | null = null
+
+function workFor(owner: ValleyPluginApi) {
+  return owner.runtime.getOrCreate('transcribe.jobWork', () => ({ pending: new Set<Promise<unknown>>(), accepting: true, closed: false }))
+}
+
+function retain<T>(owner: ValleyPluginApi, run: () => Promise<T>): Promise<T> {
+  const work = workFor(owner)
+  if (!work.accepting || work.closed) return Promise.reject(new Error(uiText('backend.cancelled')))
+  const pending = run()
+  work.pending.add(pending)
+  const settled = (): void => { work.pending.delete(pending) }
+  void pending.then(settled, settled)
+  return pending
+}
+
+async function drain(owner: ValleyPluginApi): Promise<void> {
+  const work = workFor(owner)
+  do { await Promise.allSettled([...work.pending]) } while (work.pending.size)
+}
 
 function emit(next: TranscribeJobsState): void {
   state = next
@@ -144,9 +165,9 @@ const NOTIFY_KEY_PREFIX = 'finished:'
  * carry a private `notifyOnDone` boolean, and two controls for one behaviour is
  * one too many.
  */
-function notifyFinished(relPath: string, error: string): void {
+function notifyFinished(relPath: string, error: string, owner: ValleyPluginApi): void {
   const file = baseName(relPath)
-  void api.notifications.notify(error ? 'failed' : 'done', {
+  void owner.notifications.notify(error ? 'failed' : 'done', {
     title: error ? uiText('transcribe.notifyFailedTitle') : uiText('transcribe.notifyDoneTitle'),
     body: error ? uiText('transcribe.notifyFailedBody', { file, message: error }) : file,
     key: `${NOTIFY_KEY_PREFIX}${relPath}`
@@ -157,14 +178,14 @@ function notifyFinished(relPath: string, error: string): void {
  * Clicking the banner opens the transcript it is about. Main has already focused
  * the window by the time this arrives.
  */
-export function startFinishedNotifications(): () => void {
-  return api.notifications.onAction(({ key, action }) => {
+export function startFinishedNotifications(owner = api): () => void {
+  return owner.notifications.onAction(({ key, action }) => {
     if (action !== 'click' || !key.startsWith(NOTIFY_KEY_PREFIX)) return
-    void api.workspace.openFile(key.slice(NOTIFY_KEY_PREFIX.length))
+    void owner.workspace.openFile(key.slice(NOTIFY_KEY_PREFIX.length))
   })
 }
 
-function handleProgress(event: TranscribeProgress): void {
+function handleProgress(event: TranscribeProgress, owner: ValleyPluginApi): void {
   const terminal = event.stage === 'done' || event.stage === 'error' || event.stage === 'cancelled'
   if (terminal) {
     const finished = drop(event.jobId)
@@ -177,7 +198,7 @@ function handleProgress(event: TranscribeProgress): void {
     const relPath = finished.relPath
     if (event.stage === 'error' && !stopped) setError(relPath, event.message || uiText('transcribe.failed'))
     if (event.stage !== 'cancelled' && !stopped) {
-      void notifyFinished(relPath, event.stage === 'error' ? event.message ?? '' : '')
+      void notifyFinished(relPath, event.stage === 'error' ? event.message ?? '' : '', owner)
     }
     return
   }
@@ -280,22 +301,40 @@ export function jobReadout(job: TranscribeJob): JobReadout {
 }
 
 /** Subscribe once, in `register()`. Returns the disposer the plugin unwinds. */
-export function initJobs(): () => void {
+export function initJobs(owner = api): () => Promise<void> {
   offProgress?.()
+  jobsApi = owner
+  const work = workFor(owner)
   // A fresh instance starts empty. A hot reload mid-run loses its chip for at
   // most one progress event — the next one re-adopts the job.
   owned.clear()
+  cancelling.clear()
+  if (ticker !== 0) window.clearInterval(ticker)
+  ticker = 0
   emit(EMPTY)
-  offProgress = transcribeServices(api).onProgress(handleProgress)
+  const off = transcribeServices(owner).onProgress((event) => { if (jobsApi === owner) handleProgress(event, owner) })
+  offProgress = off
+  const offUnload = owner.runtime.onBeforeUnload(async () => {
+    work.accepting = false
+    await drain(owner)
+  }, () => { if (!work.closed) work.accepting = true })
+  let disposal: Promise<void> | undefined
   return () => {
-    offProgress?.()
-    offProgress = null
-    if (ticker !== 0) {
-      window.clearInterval(ticker)
+    if (disposal) return disposal
+    work.closed = true
+    work.accepting = false
+    off()
+    offUnload()
+    if (offProgress === off) offProgress = null
+    disposal = drain(owner).then(() => {
+      if (jobsApi !== owner) return
+      if (ticker !== 0) window.clearInterval(ticker)
       ticker = 0
-    }
-    owned.clear()
-    emit(EMPTY)
+      owned.clear()
+      cancelling.clear()
+      emit(EMPTY)
+    })
+    return disposal
   }
 }
 
@@ -308,7 +347,7 @@ export function initJobs(): () => void {
  * with it: that is what an undo entry restores, and "nothing" is the wrong
  * answer for a file that already had one.
  */
-export async function transcribeToStore(input: {
+export function transcribeToStore(input: {
   relPath: string
   engine: 'local' | 'openai'
   connectionId?: string
@@ -316,20 +355,22 @@ export async function transcribeToStore(input: {
   language: string
   jobId?: string
   durationMs?: number
-}): Promise<{ segments: TranscriptSegment[]; previous: TranscriptSegment[] }> {
-  const response = await transcribeServices(api).file(input.relPath, {
-    engine: input.engine,
-    connectionId: input.connectionId,
-    model: input.model,
-    language: input.language,
-    jobId: input.jobId,
-    durationMs: input.durationMs
+}, owner = api): Promise<{ segments: TranscriptSegment[]; previous: TranscriptSegment[] }> {
+  return retain(owner, async () => {
+    const response = await transcribeServices(owner).file(input.relPath, {
+      engine: input.engine,
+      connectionId: input.connectionId,
+      model: input.model,
+      language: input.language,
+      jobId: input.jobId,
+      durationMs: input.durationMs
+    })
+    if (!response.ok || !response.data) throw new Error(response.error || uiText('transcribe.failed'))
+    const segments = response.data
+    const { ok, previous } = await replaceFileSegments(input.relPath, segments, owner)
+    if (!ok) throw new Error(uiText('transcribe.persistFailed'))
+    return { segments, previous }
   })
-  if (!response.ok || !response.data) throw new Error(response.error || uiText('transcribe.failed'))
-  const segments = response.data
-  const { ok, previous } = await replaceFileSegments(input.relPath, segments)
-  if (!ok) throw new Error(uiText('transcribe.persistFailed'))
-  return { segments, previous }
 }
 
 /**
@@ -353,62 +394,64 @@ export async function transcribeToStore(input: {
  * todo and calendar data layers do it, so ⌘Z still restores the transcript the
  * run replaced.
  */
-export async function startTranscription(input: {
+export function startTranscription(input: {
   relPath: string
   model?: string
   language?: string
   durationMs?: number
-}): Promise<void> {
-  const settings = readSettings()
-  const model = knownModel(input.model ?? settings.model)
-  const language = input.language ?? settings.language
-  runCount += 1
-  const jobId = `${input.relPath}#${runCount}`
-  owned.add(jobId)
-  setError(input.relPath, '')
-  const startedAt = Date.now()
-  upsert({
-    jobId,
-    relPath: input.relPath,
-    model,
-    stage: 'start',
-    startedAt,
-    elapsedMs: 0,
-    stageStartedAt: startedAt,
-    stageElapsedMs: 0
-  })
-
-  let message = ''
-  try {
-    const { segments, previous } = await transcribeToStore({
-      relPath: input.relPath,
-      engine: settings.engine,
-      connectionId: settings.openAiConnectionId || undefined,
-      model,
-      language,
+}, owner = api): Promise<void> {
+  return retain(owner, async () => {
+    const settings = readSettings(owner)
+    const model = knownModel(input.model ?? settings.model)
+    const language = input.language ?? settings.language
+    runCount += 1
+    const jobId = `${input.relPath}#${runCount}`
+    owned.add(jobId)
+    setError(input.relPath, '')
+    const startedAt = Date.now()
+    upsert({
       jobId,
-      durationMs: input.durationMs
+      relPath: input.relPath,
+      model,
+      stage: 'start',
+      startedAt,
+      elapsedMs: 0,
+      stageStartedAt: startedAt,
+      stageElapsedMs: 0
     })
-    api.undo.push({
-      label: uiText('transcribe.undoLabel', { file: baseName(input.relPath) }),
-      undo: async () => ({ ok: (await replaceFileSegments(input.relPath, previous)).ok }),
-      redo: async () => ({ ok: (await replaceFileSegments(input.relPath, segments)).ok })
-    })
-  } catch (err) {
-    message = err instanceof Error ? err.message : uiText('transcribe.failed')
-  } finally {
-    owned.delete(jobId)
-    drop(jobId)
-  }
 
-  // Cancelling is not a failure — it is the button doing what it says. The
-  // driver does not know that: it reports a stopped run as a thrown error, so
-  // our own intent is the only thing that tells them apart, and without it
-  // every Cancel ended in a red line plus a "failed" notification.
-  const stopped = cancelling.delete(jobId)
-  const failure = Boolean(message) && !stopped
-  if (failure) setError(input.relPath, message)
-  if (!stopped) void notifyFinished(input.relPath, failure ? message : '')
+    let message = ''
+    try {
+      const { segments, previous } = await transcribeToStore({
+        relPath: input.relPath,
+        engine: settings.engine,
+        connectionId: settings.openAiConnectionId || undefined,
+        model,
+        language,
+        jobId,
+        durationMs: input.durationMs
+      }, owner)
+      owner.undo.push({
+        label: uiText('transcribe.undoLabel', { file: baseName(input.relPath) }),
+        undo: async () => ({ ok: (await replaceFileSegments(input.relPath, previous, owner)).ok }),
+        redo: async () => ({ ok: (await replaceFileSegments(input.relPath, segments, owner)).ok })
+      })
+    } catch (err) {
+      message = err instanceof Error ? err.message : uiText('transcribe.failed')
+    } finally {
+      owned.delete(jobId)
+      if (jobsApi === owner) drop(jobId)
+    }
+
+    // Cancelling is not a failure — it is the button doing what it says. The
+    // driver does not know that: it reports a stopped run as a thrown error, so
+    // our own intent is the only thing that tells them apart, and without it
+    // every Cancel ended in a red line plus a "failed" notification.
+    const stopped = cancelling.delete(jobId)
+    const failure = Boolean(message) && !stopped
+    if (failure && jobsApi === owner) setError(input.relPath, message)
+    if (!stopped) void notifyFinished(input.relPath, failure ? message : '', owner)
+  })
 }
 
 /**
@@ -418,13 +461,15 @@ export async function startTranscription(input: {
  * seconds to come down, and a dropped entry would be re-adopted by the very next
  * progress line, flipping the button back to Cancel.
  */
-export async function cancelJob(jobId: string): Promise<boolean> {
+export async function cancelJob(jobId: string, owner = api): Promise<boolean> {
+  if (jobsApi !== owner) return false
   const job = state.jobs.find((entry) => entry.jobId === jobId)
   if (!job) return false
   if (job.cancelling) return true
   cancelling.add(jobId)
   upsert({ ...job, cancelling: true })
-  const result = await transcribeServices(api).cancel(jobId).catch((reason) => ({ ok: false as const, error: reason instanceof Error ? reason.message : String(reason), data: undefined }))
+  const result = await transcribeServices(owner).cancel(jobId).catch((reason) => ({ ok: false as const, error: reason instanceof Error ? reason.message : String(reason), data: undefined }))
+  if (jobsApi !== owner) return result.ok && result.data?.cancelled !== false
   if (!result.ok || result.data?.cancelled === false) {
     cancelling.delete(jobId)
     if (!state.jobs.some((entry) => entry.jobId === jobId)) return false
@@ -447,8 +492,8 @@ function snapshot(): TranscribeJobsState {
 }
 
 /** The store outside React — what the views read through {@link useTranscribeJobs}. */
-export function transcribeJobs(): TranscribeJobsState {
-  return state
+export function transcribeJobs(owner = api): TranscribeJobsState {
+  return jobsApi === owner ? state : EMPTY
 }
 
 export function useTranscribeJobs(): TranscribeJobsState {

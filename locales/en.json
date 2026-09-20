@@ -211,6 +211,7 @@
   "backend.read": "Transcript output could not be read",
   "backend.file": "File not found.",
   "backend.running": "That transcription is already running.",
+  "backend.capacity": "Four transcriptions are already running. Wait for one to finish.",
   "backend.engine": "Unknown transcription engine",
   "backend.model": "Unknown transcription model",
   "backend.cancelled": "Transcription cancelled.",

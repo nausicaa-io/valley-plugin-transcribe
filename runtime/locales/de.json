@@ -211,6 +211,7 @@
   "backend.read": "Die Transkriptionsausgabe konnte nicht gelesen werden",
   "backend.file": "Datei nicht gefunden.",
   "backend.running": "Diese Transkription läuft bereits.",
+  "backend.capacity": "Es laufen bereits vier Transkriptionen. Warte, bis eine abgeschlossen ist.",
   "backend.engine": "Unbekannte Transkriptions-Engine",
   "backend.model": "Unbekanntes Transkriptionsmodell",
   "backend.cancelled": "Transkription abgebrochen.",

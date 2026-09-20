@@ -1,6 +1,7 @@
 import { transcribeServices } from '../src/serviceClient'
 import type { ValleyPluginManifest } from '@valley/plugin-sdk/types'
-import { readSettings } from '../src/store'
+import { readSettings, segmentsForFile } from '../src/store'
+import type { TranscriptSegment } from '../src/serviceClient'
 import { describe, expect, it, vi } from 'vitest'
 import {
   FILE_TREE_CONTEXT_ITEM_V1,
@@ -17,6 +18,30 @@ function setup(): ReturnType<typeof createMockValleyApi> {
 }
 
 describe('register', () => {
+  it('keeps an accepted command and its undo on the original API after a rebind', async () => {
+    const manifest = { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] }
+    const previous = createMockValleyApi({ manifest })
+    let finish!: (value: { ok: boolean; data: TranscriptSegment[] }) => void
+    transcribeServices(previous.api).file = () => new Promise((resolve) => { finish = resolve })
+    const offPrevious = register(previous.api)
+    const running = previous.api.commands.execute('transcribe:file', { file: 'Meadow.mp3' })
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    const current = createMockValleyApi({ manifest })
+    const offCurrent = register(current.api)
+    const segment: TranscriptSegment = { id: 'meadow:0', file: 'Meadow.mp3', fileHash: 'meadow', start: 0, end: 2, text: 'Birdsong', language: 'en', createdAt: '2026-01-01T00:00:00.000Z' }
+    finish({ ok: true, data: [segment] })
+    expect(await running).toMatchObject({ ok: true, value: [segment] })
+    expect(await segmentsForFile('Meadow.mp3', previous.api)).toEqual([segment])
+    expect(await segmentsForFile('Meadow.mp3', current.api)).toEqual([])
+    expect(previous.busUndo).toHaveLength(1)
+    await previous.busUndo[0].undo()
+    expect(await segmentsForFile('Meadow.mp3', previous.api)).toEqual([])
+    await previous.busUndo[0].redo?.()
+    expect(await segmentsForFile('Meadow.mp3', previous.api)).toEqual([segment])
+    expect(await segmentsForFile('Meadow.mp3', current.api)).toEqual([])
+    await Promise.all([offPrevious(), offCurrent()])
+  })
+
   it('contributes a metadata-panel segment for audio and video', () => {
     const { api } = setup()
     register(api)

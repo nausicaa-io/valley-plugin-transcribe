@@ -1,5 +1,5 @@
 import { transcribeServices } from '../src/serviceClient'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ValleyPluginApi } from '@valley/plugin-sdk'
 import type { TranscribeProgress } from '../src/serviceClient'
 import type { ValleyPluginManifest } from '@valley/plugin-sdk/types'
@@ -249,6 +249,7 @@ describe('jobReadout', () => {
  * approval TTL and then denied itself — no Whisper process was ever spawned.
  */
 describe('starting a transcription from the UI', () => {
+  afterEach(() => vi.useRealTimers())
   const SEGMENT: TranscriptSegment = {
     id: 'hash:0',
     file: 'a.mp3',
@@ -275,6 +276,88 @@ describe('starting a transcription from the UI', () => {
     initJobs()
     return mock
   }
+
+  it('keeps a 150-second result, saved transcript, and undo with the session that accepted it', async () => {
+    vi.useFakeTimers()
+    let finish!: (result: Awaited<ReturnType<TranscribeFile>>) => void
+    const file = vi.fn(() => new Promise<Awaited<ReturnType<TranscribeFile>>>((resolve) => { finish = resolve }))
+    const previous = mountWith(file)
+    const running = startTranscription({ relPath: 'a.mp3' })
+    await vi.advanceTimersByTimeAsync(150_000)
+    const current = mountWith(async () => ({ ok: true, data: [] }))
+    finish({ ok: true, data: [SEGMENT] })
+    await running
+    expect(file).toHaveBeenCalledTimes(1)
+    expect(await segmentsForFile('a.mp3', previous.api)).toEqual([SEGMENT])
+    expect(await segmentsForFile('a.mp3', current.api)).toEqual([])
+    expect(previous.undoActions).toHaveLength(1)
+    expect(current.undoActions).toHaveLength(0)
+    await previous.undoActions[0].undo()
+    expect(await segmentsForFile('a.mp3', previous.api)).toEqual([])
+    await previous.undoActions[0].redo?.()
+    expect(await segmentsForFile('a.mp3', previous.api)).toEqual([SEGMENT])
+    expect(await segmentsForFile('a.mp3', current.api)).toEqual([])
+  })
+
+  it('joins persistence and undo during repeated disposal after the backend result arrives', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] } })
+    let finish!: (result: Awaited<ReturnType<TranscribeFile>>) => void
+    transcribeServices(mock.api).file = () => new Promise((resolve) => { finish = resolve })
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const transaction = mock.api.data.transaction.bind(mock.api.data)
+    const persist = vi.spyOn(mock.api.data, 'transaction').mockImplementation(async (...args) => { await held; return transaction(...args) })
+    initRuntime(mock.api)
+    const dispose = initJobs()
+    const running = startTranscription({ relPath: 'a.mp3' })
+    const closing = dispose()
+    expect(dispose()).toBe(closing)
+    let disposed = false
+    void closing.then(() => { disposed = true })
+    finish({ ok: true, data: [SEGMENT] })
+    await vi.waitFor(() => expect(persist).toHaveBeenCalledTimes(1))
+    expect(disposed).toBe(false)
+    expect(mock.undoActions).toHaveLength(0)
+    await expect(startTranscription({ relPath: 'later.mp3' }, mock.api)).rejects.toThrow('cancelled')
+    release()
+    await Promise.all([running, closing])
+    expect(mock.undoActions).toHaveLength(1)
+    expect(await segmentsForFile('a.mp3', mock.api)).toEqual([SEGMENT])
+  })
+
+  it('uses the owned backend route once and preserves an unknown outcome without saving or replaying', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] } })
+    const unknown = Object.assign(new Error('Backend outcome is unknown'), { outcome: 'unknown', retryable: false })
+    const operation = vi.spyOn(mock.api.backend, 'callOperation').mockRejectedValue(unknown)
+    const ordinary = vi.spyOn(mock.api.backend, 'call')
+    initRuntime(mock.api)
+    const dispose = initJobs()
+    await startTranscription({ relPath: 'a.mp3' })
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(operation).toHaveBeenCalledWith('file', expect.objectContaining({ file: 'a.mp3' }))
+    expect(ordinary).not.toHaveBeenCalled()
+    expect(await segmentsForFile('a.mp3')).toEqual([])
+    expect(mock.undoActions).toHaveLength(0)
+    expect(transcribeJobs().errors.get('a.mp3')).toBe(unknown.message)
+    await dispose()
+  })
+
+  it('drains accepted work during preparation and resumes admission when the transition is cancelled', async () => {
+    let finish!: (result: Awaited<ReturnType<TranscribeFile>>) => void
+    const mock = mountWith(() => new Promise((resolve) => { finish = resolve }))
+    const running = startTranscription({ relPath: 'a.mp3' })
+    let prepared = false
+    const preparing = mock.runBeforeUnload().then(() => { prepared = true })
+    await expect(startTranscription({ relPath: 'later.mp3' })).rejects.toThrow('cancelled')
+    expect(prepared).toBe(false)
+    finish({ ok: true, data: [SEGMENT] })
+    await Promise.all([running, preparing])
+    expect(mock.undoActions).toHaveLength(1)
+    mock.runUnloadCancellation()
+    transcribeServices(mock.api).file = async () => ({ ok: true, data: [SEGMENT] })
+    await startTranscription({ relPath: 'a.mp3' })
+    expect(mock.undoActions).toHaveLength(2)
+  })
 
   it('runs the driver and never dispatches the write command', async () => {
     const file = vi.fn(async () => ({ ok: true, data: [SEGMENT] }))

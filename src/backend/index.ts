@@ -1,5 +1,5 @@
 import { uiText, initBackendLocalization } from '../localization'
-import type { PluginBackendApi } from '@valley/plugin-sdk'
+import type { PluginBackendApi, PluginBackendOperationContext } from '@valley/plugin-sdk'
 import type { PluginNativeArgument } from '@valley/plugin-sdk/pluginNative'
 import type { PluginFileHandle } from '@valley/plugin-sdk/pluginNative'
 import type { TranscribeProgress } from '../serviceClient'
@@ -7,6 +7,7 @@ import { MODEL_OPTIONS, DEFAULT_MODEL } from '../models'
 import { normalizeWhisperLanguage } from './languages'
 import { parseDecodeProgress, parseDownloadPercent, segmentsFromWhisperJson, type WhisperJson } from './parsers'
 import models from './models.json'
+import { createModelCache } from './modelCache'
 
 const object = (value: unknown): Record<string, unknown> => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(uiText('backend.request'))
@@ -19,11 +20,41 @@ const text = (value: unknown, fallback = '') => {
 }
 const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)))
 
-export function register(api: PluginBackendApi): () => void {
+export function register(api: PluginBackendApi): () => Promise<void> {
   initBackendLocalization(api)
-  const jobs = new Map<string, { cancelled: boolean; requestId: string }>()
-  const modelFiles = new Map<string, PluginFileHandle>()
-  const report = (jobId: string, progress: Omit<TranscribeProgress, 'jobId'>) => api.rpc.emit('progress', { jobId, ...progress })
+  type Progress = Omit<TranscribeProgress, 'jobId'>
+  type Job = { cancelled: boolean; requestId: string; api: PluginBackendOperationContext['api']; done: Promise<void>; cancelling?: Promise<void>; model?: ReturnType<ReturnType<typeof createModelCache>['acquire']>; progress?: Progress; queuedProgress?: Progress; progressTimer?: ReturnType<typeof setTimeout>; progressAt?: number }
+  const jobs = new Map<string, Job>()
+  let closing = false
+  let disposal: Promise<void> | undefined
+  const modelCache = createModelCache(api, models)
+  const clearProgress = (job: Job) => {
+    clearTimeout(job.progressTimer)
+    job.progressTimer = undefined
+    job.queuedProgress = undefined
+  }
+  const publishProgress = (jobId: string, job: Job, progress: Progress) => {
+    clearProgress(job)
+    job.progress = progress
+    job.progressAt = Date.now()
+    job.api.rpc.emit('progress', { jobId, ...progress })
+  }
+  const report = (jobId: string, progress: Progress) => {
+    const job = jobs.get(jobId)
+    if (!job) return
+    const terminal = ['done', 'error', 'cancelled'].includes(progress.stage)
+    if (job.cancelled && !terminal) return
+    if (terminal || job.progress?.stage !== progress.stage || Date.now() - (job.progressAt ?? 0) >= 50) {
+      publishProgress(jobId, job, progress)
+      return
+    }
+    job.queuedProgress = progress
+    job.progressTimer ??= setTimeout(() => {
+      const queued = job.queuedProgress
+      if (jobs.get(jobId) === job && !job.cancelled && queued) publishProgress(jobId, job, queued)
+      else clearProgress(job)
+    }, Math.max(0, 50 - (Date.now() - (job.progressAt ?? 0))))
+  }
   const offOutput = api.native.onOutput(({ jobId, stream, base64 }) => {
     if (stream !== 'stderr' || !jobs.has(jobId)) return
     const chunk = decode(base64)
@@ -39,13 +70,13 @@ export function register(api: PluginBackendApi): () => void {
       if (phase === 'upload' && total && bytes >= total) report(job[0], { stage: 'request' })
     }
   })
-  const readJson = async (file: PluginFileHandle): Promise<WhisperJson> => {
+  const readJson = async (owner: PluginBackendOperationContext['api'], file: PluginFileHandle): Promise<WhisperJson> => {
     if (file.size > 32 * 1024 * 1024) throw new Error(uiText('backend.large'))
     let value = ''
     let offset = 0
     const decoder = new TextDecoder()
     for (;;) {
-      const result = await api.files.read(file.handle, { offset, maxBytes: 1024 * 1024 })
+      const result = await owner.files.read(file.handle, { offset, maxBytes: 1024 * 1024 })
       const bytes = Uint8Array.from(atob(result.base64), (character) => character.charCodeAt(0))
       offset += bytes.byteLength
       value += decoder.decode(bytes, { stream: !result.done })
@@ -58,7 +89,13 @@ export function register(api: PluginBackendApi): () => void {
     const job = jobs.get(jobId)
     if (!job) return false
     job.cancelled = true
-    await Promise.all([api.native.cancel(jobId), api.network.cancel(job.requestId)])
+    clearProgress(job)
+    job.cancelling ??= Promise.allSettled([job.api.native.cancel(jobId), job.api.network.cancel(job.requestId), job.model?.cancel()]).then(async (results) => {
+      await job.done
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') throw failure.reason
+    })
+    await job.cancelling
     return true
   }
   const handlers: Array<() => void> = []
@@ -67,70 +104,80 @@ export function register(api: PluginBackendApi): () => void {
       try { return { ok: true, data: await handler(object(value ?? {})) } } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
     }))
   }
-  handle('cancel', async ({ jobId }) => ({ cancelled: await cancel(text(jobId)) }))
+  const handleOperation = (name: string, handler: (payload: Record<string, unknown>, context: PluginBackendOperationContext) => unknown | Promise<unknown>) => {
+    handlers.push(api.rpc.handleOperation(name, async (value, context) => {
+      try {
+        if (closing) throw new Error(uiText('backend.cancelled'))
+        return { ok: true, data: await handler(object(value ?? {}), context) }
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+    }))
+  }
+  handleOperation('cancel', async ({ jobId }) => ({ cancelled: await cancel(text(jobId)) }))
   handle('listConnections', async () => ({ connections: (await api.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe')).map((account) => ({ id: account.id, provider: account.provider, providerName: 'OpenAI', label: account.displayName ?? '', configured: account.credentialState === 'ok' })) }))
-  const resolveWhisper = async (executablePath?: string) => {
-    const resolved = await api.native.resolve({ name: 'whisper', executablePath })
+  const resolveWhisper = async (owner: PluginBackendOperationContext['api'], executablePath?: string) => {
+    const resolved = await owner.native.resolve({ name: 'whisper', executablePath })
     const framework = resolved?.interpreterPath?.match(/^(.*\/Python\.framework\/Versions\/[^/]+)\/bin\/python[^/]*$/)
-    return resolved && framework ? await api.native.resolve({ name: 'whisper', executablePath: resolved.path, interpreterPath: `${framework[1]}/Resources/Python.app/Contents/MacOS/Python` }) : resolved
+    return resolved && framework ? await owner.native.resolve({ name: 'whisper', executablePath: resolved.path, interpreterPath: `${framework[1]}/Resources/Python.app/Contents/MacOS/Python` }) : resolved
   }
   handle('status', async ({ binPath }) => {
-    const [executable, ffmpeg] = await Promise.all([resolveWhisper(text(binPath) || undefined), api.native.resolve({ name: 'ffmpeg' })])
+    const [executable, ffmpeg] = await Promise.all([resolveWhisper(api, text(binPath) || undefined), api.native.resolve({ name: 'ffmpeg' })])
     return { available: executable !== null, binPath: executable?.path ?? null, ffmpeg: ffmpeg !== null }
   })
-  handle('file', async (payload) => {
+  handleOperation('file', async (payload, context) => {
+    const owner = context.api
     const file = text(payload.file)
     if (!file) throw new Error(uiText('backend.file'))
     const jobId = text(payload.jobId, file)
     if (!jobId || jobs.has(jobId)) throw new Error(uiText('backend.running'))
-    const settings = api.settings.get()
+    if (jobs.size >= 4) throw new Error(uiText('backend.capacity'))
+    const settings = owner.settings.get()
     const engine = text(payload.engine, 'local')
     if (engine !== 'local' && engine !== 'openai') throw new Error(uiText('backend.engine'))
     const language = normalizeWhisperLanguage(text(payload.language))
     const model = text(payload.model, DEFAULT_MODEL)
     if (!MODEL_OPTIONS.some((option) => option.value === model)) throw new Error(uiText('backend.model'))
-    const job = { cancelled: false, requestId: `transcription:${jobId}` }
+    let finished!: () => void
+    const job: Job = { cancelled: context.cancellation.aborted, requestId: `transcription:${jobId}`, api: owner, done: new Promise<void>((resolve) => { finished = resolve }) }
     jobs.set(jobId, job)
+    const aborted = (): void => { void cancel(jobId).catch(() => {}) }
+    context.cancellation.addEventListener('abort', aborted, { once: true })
     const handles: string[] = []
     const started = Date.now()
+    let terminal: Omit<TranscribeProgress, 'jobId'> | undefined
     const ensureActive = () => { if (job.cancelled) throw new Error(uiText('backend.cancelled')) }
     try {
+      ensureActive()
       report(jobId, { stage: 'start' })
-      const input = await api.files.openVault(file)
+      const input = await owner.files.openVault(file)
       handles.push(input.handle)
       let result: WhisperJson
       let outputModel = model
       if (engine === 'local') {
-        const [executable, ffmpeg] = await Promise.all([resolveWhisper(text(settings.whisperPath) || undefined), api.native.resolve({ name: 'ffmpeg' })])
+        const [executable, ffmpeg] = await Promise.all([resolveWhisper(owner, text(settings.whisperPath) || undefined), owner.native.resolve({ name: 'ffmpeg' })])
         if (!executable || !ffmpeg) throw new Error(uiText('backend.tools'))
         ensureActive()
-        const source = models[model as keyof typeof models]
-        let weights = modelFiles.get(model) ?? await api.files.cached({ sha256: source.sha256, name: source.name })
-        if (!weights) {
-          report(jobId, { stage: 'download', percent: 0 })
-          weights = await api.network.download({ requestId: job.requestId, url: source.url, name: source.name, sha256: source.sha256, maxBytes: 4 * 1024 ** 3 })
-        }
-        modelFiles.set(model, weights)
+        job.model = modelCache.acquire(model, percent => report(jobId, { stage: 'download', percent }))
+        const weights = await job.model.result
         ensureActive()
         const args: PluginNativeArgument[] = [{ input: input.handle }, '--model', { input: weights.handle }, '--output_format', 'json', '--output_dir', { outputDirectory: true }, '--fp16', 'False', '--verbose', 'False', ...(language ? ['--language', language] : [])]
         report(jobId, { stage: 'decode' })
-        const output = await api.native.run({ jobId, executable: executable.handle, tools: [ffmpeg.handle], args, environment: { PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' } })
+        const output = await owner.native.run({ jobId, executable: executable.handle, tools: [ffmpeg.handle], args, environment: { PYTHONUNBUFFERED: '1', PYTHONDONTWRITEBYTECODE: '1' } })
         handles.push(...output.outputs.map((entry) => entry.handle))
         ensureActive()
         if (output.exitCode !== 0) throw new Error(uiText('backend.exit', { code: output.exitCode }))
         const transcript = output.outputs.find((entry) => entry.name.endsWith('.json'))
         if (!transcript) throw new Error(uiText('backend.empty'))
-        result = await readJson(transcript)
+        result = await readJson(owner, transcript)
       } else {
         const connectionId = text(payload.connectionId)
-        const connections = (await api.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe') && account.credentialState === 'ok')
+        const connections = (await owner.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe') && account.credentialState === 'ok')
         const connection = connectionId ? connections.find((account) => account.id === connectionId) : connections[0]
         if (!connection) throw new Error(uiText('backend.connection'))
         const url = new URL(`${(connection.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')}/audio/transcriptions`)
-        const credential = await api.accounts.authorize(connection.id, 'ai.transcribe', { host: url.hostname, port: Number(url.port || 443), security: 'tls' })
+        const credential = await owner.accounts.authorize(connection.id, 'ai.transcribe', { host: url.hostname, port: Number(url.port || 443), security: 'tls' })
         ensureActive()
         report(jobId, { stage: 'upload', percent: 0 })
-        const response = await api.network.fetch({ requestId: job.requestId, url: url.toString(), method: 'POST', timeoutMs: 900000, credential: { handle: credential, placement: 'header', name: 'Authorization', prefix: 'Bearer ' }, multipart: { fields: { model: 'whisper-1', response_format: 'verbose_json', 'timestamp_granularities[]': 'segment', ...(language ? { language } : {}) }, files: [{ name: 'file', handle: input.handle }] } })
+        const response = await owner.network.fetch({ requestId: job.requestId, url: url.toString(), method: 'POST', timeoutMs: 900000, credential: { handle: credential, placement: 'header', name: 'Authorization', prefix: 'Bearer ' }, multipart: { fields: { model: 'whisper-1', response_format: 'verbose_json', 'timestamp_granularities[]': 'segment', ...(language ? { language } : {}) }, files: [{ name: 'file', handle: input.handle }] } })
         ensureActive()
         const json = object(JSON.parse(decode(response.bodyBase64)))
         if (response.status < 200 || response.status >= 300) throw new Error(typeof (json.error as { message?: unknown } | undefined)?.message === 'string' ? String((json.error as { message: string }).message) : uiText('backend.openai', { status: response.status }))
@@ -139,13 +186,40 @@ export function register(api: PluginBackendApi): () => void {
       }
       ensureActive()
       const segments = segmentsFromWhisperJson({ json: result, relPath: file, fileHash: input.sha1!, model: outputModel, requestedLanguage: language, createdAt: new Date().toISOString(), transcriptionDurationMs: Date.now() - started })
-      report(jobId, { stage: 'done', percent: 100 })
+      terminal = { stage: 'done', percent: 100 }
       return segments
     } catch (error) {
       const message = job.cancelled ? uiText('backend.cancelled') : error instanceof Error ? error.message : uiText('backend.failed')
-      report(jobId, { stage: job.cancelled ? 'cancelled' : 'error', message })
+      terminal = { stage: job.cancelled ? 'cancelled' : 'error', message }
       throw new Error(message)
-    } finally { jobs.delete(jobId); if (handles.length) await api.files.release(handles).catch(() => {}) }
+    } finally {
+      try {
+        const cleanup = await Promise.allSettled([job.model?.cancel(), handles.length ? owner.files.release(handles) : undefined])
+        const failure = cleanup.find(result => result.status === 'rejected')
+        if (failure?.status === 'rejected') throw failure.reason
+        ensureActive()
+      } catch (error) {
+        terminal = { stage: job.cancelled ? 'cancelled' : 'error', message: error instanceof Error ? error.message : String(error) }
+        throw error
+      } finally {
+        context.cancellation.removeEventListener('abort', aborted)
+        try { if (terminal) report(jobId, terminal) }
+        finally { clearProgress(job); jobs.delete(jobId); finished() }
+      }
+    }
   })
-  return () => { for (const jobId of jobs.keys()) void cancel(jobId); offOutput(); offNetwork(); for (const dispose of handlers) dispose(); void api.files.release([...modelFiles.values()].map((entry) => entry.handle)).catch(() => {}); modelFiles.clear() }
+  return () => {
+    if (disposal) return disposal
+    closing = true
+    for (const dispose of handlers) dispose()
+    disposal = (async () => {
+      const results = await Promise.allSettled([...jobs.keys()].map(cancel))
+      offOutput()
+      offNetwork()
+      await modelCache.dispose()
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure?.status === 'rejected') throw failure.reason
+    })()
+    return disposal
+  }
 }

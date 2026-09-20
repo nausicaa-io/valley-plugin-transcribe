@@ -211,6 +211,7 @@
   "backend.read": "No se pudo leer el resultado de la transcripción",
   "backend.file": "Archivo no encontrado.",
   "backend.running": "Esa transcripción ya está en curso.",
+  "backend.capacity": "Ya hay cuatro transcripciones en curso. Espera a que termine una.",
   "backend.engine": "Motor de transcripción desconocido",
   "backend.model": "Modelo de transcripción desconocido",
   "backend.cancelled": "Transcripción cancelada.",
