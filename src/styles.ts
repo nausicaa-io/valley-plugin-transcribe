@@ -8,8 +8,8 @@
  */
 const CSS = `
 .transcribe-view{display:flex;flex-direction:column;min-height:100%;color:var(--text-color)}
-.transcribe-header{height:var(--tab-height);display:flex;align-items:center;justify-content:space-between;padding:0 10px;border-bottom:1px solid var(--border-light);gap:8px}
-.transcribe-header strong{margin-left:var(--plugin-navigation-offset, 0px)}
+.transcribe-header{height:var(--app-bar-height);flex:0 0 auto;box-sizing:border-box;min-width:0;display:flex;align-items:center;justify-content:space-between;padding:0 calc(var(--plugin-actions-offset, 0px) + 10px) 0 calc(var(--plugin-navigation-offset, 0px) + 10px);border-bottom:1px solid var(--border-light);gap:8px}
+.transcribe-header strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .transcribe-segments{display:flex;flex-direction:column;padding:8px;gap:6px}
 .transcribe-segment{display:grid;grid-template-columns:auto 1fr;gap:3px 10px;text-align:left;padding:9px;border:1px solid var(--border-light);border-radius:7px;background:var(--container-color);color:var(--text-color)}
 .transcribe-segment:hover{background:var(--hover-bg)}
