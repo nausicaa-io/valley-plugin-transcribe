@@ -842,6 +842,57 @@
         "default": "",
         "description": "Leave blank to find it automatically. Set this if Whisper is installed somewhere unusual.",
         "descriptionKey": "auto.6ddc46363701"
+      },
+      {
+        "key": "engine",
+        "label": "Transcription engine",
+        "type": "custom",
+        "settingsVisible": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "local",
+            "openai"
+          ]
+        },
+        "default": "local"
+      },
+      {
+        "key": "openAiConnectionId",
+        "label": "AI connection",
+        "type": "custom",
+        "settingsVisible": false,
+        "schema": {
+          "type": "string"
+        },
+        "default": ""
+      },
+      {
+        "key": "followByDefault",
+        "label": "Follow playback",
+        "type": "custom",
+        "settingsVisible": false,
+        "schema": {
+          "type": "boolean"
+        },
+        "default": true
+      },
+      {
+        "key": "followPosition",
+        "label": "Transcript follow position",
+        "type": "custom",
+        "settingsVisible": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "top",
+            "upper-middle",
+            "middle",
+            "lower-middle",
+            "bottom"
+          ]
+        },
+        "default": "middle"
       }
     ]
   },
@@ -857,6 +908,227 @@
     "backend": "runtime/backend.js",
     "backgroundOperations": [
       "file"
+    ],
+    "services": [
+      {
+        "id": "command.file",
+        "version": "1.0.0",
+        "method": "file",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "file",
+            "description": "Transcribe a vault audio or video file using local Whisper or a configured connection",
+            "effect": "execute",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "jobId": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "engine": {
+                  "enum": [
+                    "local",
+                    "openai"
+                  ]
+                },
+                "connectionId": {
+                  "type": "string",
+                  "maxLength": 4096
+                },
+                "language": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "model": {
+                  "type": "string",
+                  "maxLength": 128
+                }
+              },
+              "required": [
+                "file"
+              ],
+              "additionalProperties": false
+            },
+            "result": "driver",
+            "outputSchema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "file": {
+                            "type": "string"
+                          },
+                          "fileHash": {
+                            "type": "string"
+                          },
+                          "start": {
+                            "type": "number"
+                          },
+                          "end": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "language": {
+                            "type": "string"
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "transcriptionDurationMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "file",
+                          "fileHash",
+                          "start",
+                          "end",
+                          "text",
+                          "language",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      },
+      {
+        "id": "command.cancel",
+        "version": "1.0.0",
+        "method": "cancel",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "command": {
+            "id": "cancel",
+            "description": "Cancel one transcription job",
+            "effect": "write",
+            "inputSchema": {
+              "type": "object",
+              "properties": {
+                "jobId": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                }
+              },
+              "required": [
+                "jobId"
+              ],
+              "additionalProperties": false
+            },
+            "result": "driver",
+            "outputSchema": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "cancelled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "cancelled"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "data"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error"
+                  ],
+                  "additionalProperties": false
+                }
+              ],
+              "$schema": "http://json-schema.org/draft-07/schema#"
+            }
+          }
+        }
+      }
     ]
   },
   "permissions": {

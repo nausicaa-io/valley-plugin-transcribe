@@ -1,3 +1,4 @@
+import Ajv from 'ajv'
 import { createMockValleyApi } from '@valley/plugin-testkit'
 import config from '../config.json'
 import de from '../locales/de.json'
@@ -7,6 +8,8 @@ import type { PluginAccountConnection } from '@valley/plugin-sdk/pluginNetwork'
 import type { PluginDownloadRequest, PluginNetworkProgress } from '@valley/plugin-sdk/pluginNetwork'
 import { register } from '../src/backend'
 import models from '../src/backend/models.json'
+
+const outputSchemas = new Map(config.runtime.services.flatMap(service => service.metadata?.command ? [[service.method, new Ajv({ strict: false, strictSchema: true, allErrors: true, validateFormats: false, allowUnionTypes: true, ownProperties: true }).compile(service.metadata.command.outputSchema)] as const] : []))
 
 const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64')
 const result = { language: 'german', segments: [{ start: 0.25, end: 2, text: ' Guten Tag. ' }] }
@@ -36,7 +39,7 @@ function setup(accounts: PluginAccountConnection[] = []) {
   }
   const dispose = register(api as unknown as PluginBackendApi)
   const scope = (owner = api, controller = new AbortController()): PluginBackendOperationContext => ({ id: `operation:${Math.random()}`, api: owner as unknown as PluginBackendOperationContext['api'], cancellation: controller.signal })
-  return { ...api, handlers, operations, scope, call: async (method: string, payload: unknown, context = scope()) => await (operations.has(method) ? operations.get(method)!(payload, context) : handlers.get(method)!(payload)), dispose }
+  return { ...api, handlers, operations, scope, call: async (method: string, payload: unknown, context = scope()) => { const result = await (operations.has(method) ? operations.get(method)!(payload, context) : handlers.get(method)!(payload)); const validate = outputSchemas.get(method); if (validate) expect(validate(result), JSON.stringify(validate.errors)).toBe(true); return result }, dispose }
 }
 
 afterEach(() => vi.useRealTimers())
