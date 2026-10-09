@@ -13,6 +13,9 @@ import {
 import { createMockValleyApi } from './harness'
 import { register } from '../src/index'
 import TRANSCRIBE_PLUGIN_CONFIG from '../config.json'
+import Ajv from 'ajv'
+import { segmentResult, segmentsResult } from '../src/commandResults'
+import { inspectTranscriptProperties } from '../src/surfaces'
 
 function setup(): ReturnType<typeof createMockValleyApi> {
   return createMockValleyApi({ manifest: { id: 'transcribe' } })
@@ -35,7 +38,9 @@ describe('register', () => {
     const offCurrent = register(current.api)
     const segment: TranscriptSegment = { id: 'meadow:0', file: 'Meadow.mp3', fileHash: 'meadow', start: 0, end: 2, text: 'Birdsong', language: 'en', createdAt: '2026-01-01T00:00:00.000Z' }
     finish({ ok: true, data: [segment] })
-    expect(await running).toMatchObject({ ok: true, value: [segment] })
+    const result = await running
+    expect(result).toMatchObject({ ok: true, value: [segment] })
+    expect(new Ajv({ strict: false }).validate(segmentsResult, result.ok && result.value)).toBe(true)
     expect(await segmentsForFile('Meadow.mp3', previous.api)).toEqual([segment])
     expect(await segmentsForFile('Meadow.mp3', current.api)).toEqual([])
     expect(previous.busUndo).toHaveLength(1)
@@ -149,6 +154,36 @@ describe('manifest', () => {
 
 
 describe('transcript surfaces', () => {
+  it('returns typed transcript and property results with false and empty values', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] }, files: { 'Track.mp3': 'media' } })
+    const registered = vi.spyOn(mock.api.commands, 'register')
+    const dispose = register(mock.api)
+    const validator = new Ajv({ strict: false })
+    const segment: TranscriptSegment = { id: 'track:0', file: 'Track.mp3', fileHash: 'track', start: 0, end: 2, text: '', language: '', createdAt: '2026-01-01T00:00:00.000Z' }
+    await replaceFileSegments(segment.file, [segment], mock.api)
+    const invoke = async (id: string, input?: unknown) => {
+      const result = await mock.api.commands.execute(`transcribe:${id}`, input)
+      expect(result.ok, id).toBe(true)
+      if (!result.ok) throw new Error(`Command failed: ${id}`)
+      const entry = registered.mock.calls.find(([command]) => command.id === id)![0]
+      const spec = entry as typeof entry & { outputSchema: Record<string, unknown> }
+      expect(validator.validate(spec.outputSchema, result.value), JSON.stringify(validator.errors)).toBe(true)
+      return result.value
+    }
+    try {
+      expect(await invoke('list', { query: '' })).toEqual([segment])
+      expect(await invoke('get', { file: segment.file })).toEqual([segment])
+      await invoke('jobs')
+      expect(await invoke('open-segment', { id: segment.id })).toEqual(segment)
+      expect(validator.validate(segmentResult, segment)).toBe(true)
+      expect(mock.api.workspace.openFile).toHaveBeenCalledWith(segment.file, { type: 'media-time', seconds: 0 })
+      const baseline = JSON.stringify(await inspectTranscriptProperties(segment.file))
+      await invoke('properties-edit', { subject: { pluginId: 'transcribe', surface: 'main_workspace', view: { file: segment.file } }, values: { follow: false, query: '', language: '' } })
+      expect(await inspectTranscriptProperties(segment.file)).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'follow', value: false }), expect.objectContaining({ id: 'query', value: '' })]))
+      await mock.busUndo.at(-1)!.undo()
+      expect(JSON.stringify(await inspectTranscriptProperties(segment.file))).toBe(baseline)
+    } finally { await dispose() }
+  })
   it('restores view drafts without changing global engine setup or stealing background focus', async () => {
     const mock = createMockValleyApi({ manifest: { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] }, files: { 'Track.mp3': 'media' } })
     const dispose = register(mock.api)
@@ -160,6 +195,40 @@ describe('transcript surfaces', () => {
     await expect(provider.restore({ v: 1, file: 'Missing.mp3' })).rejects.toThrow('no longer exists')
     expect(provider.getSnapshot().view.file).toBe('Track.mp3')
     dispose()
+  })
+
+  it('declares open-segment as a window-state effect and refuses missing targets as not applied', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] }, files: { 'Track.mp3': 'media' } })
+    const registered = vi.spyOn(mock.api.commands, 'register')
+    const dispose = register(mock.api)
+    try {
+      expect(mock.api.commands.describe('transcribe:open-segment')).toMatchObject({ sideEffect: 'execute', previewSupported: true })
+      const command = registered.mock.calls.find(([spec]) => spec.id === 'open-segment')![0] as unknown as { run: (input: { id: string }) => Promise<unknown> }
+      await expect(command.run({ id: 'missing:0' })).rejects.toMatchObject({ code: 'SEGMENT_NOT_FOUND', outcome: 'not-applied' })
+      await replaceFileSegments('Gone.mp3', [{ id: 'gone:0', file: 'Gone.mp3', fileHash: 'gone', start: 1, end: 2, text: 'x', language: 'en', createdAt: '2026-01-01T00:00:00.000Z' }], mock.api)
+      await expect(command.run({ id: 'gone:0' })).rejects.toMatchObject({ code: 'FILE_NOT_FOUND', outcome: 'not-applied' })
+      expect(mock.api.workspace.openFile).not.toHaveBeenCalled()
+    } finally { await dispose() }
+  })
+
+  it('refuses properties edits without a transcript subject before any effect', async () => {
+    const mock = createMockValleyApi({ manifest: { id: 'transcribe', datasets: TRANSCRIBE_PLUGIN_CONFIG.datasets as unknown as ValleyPluginManifest['datasets'] } })
+    const registered = vi.spyOn(mock.api.commands, 'register')
+    const set = vi.spyOn(mock.api.settings, 'set')
+    const dispose = register(mock.api)
+    try {
+      const spec = registered.mock.calls.find(([command]) => command.id === 'properties-edit')![0] as unknown as { input: { schema: Record<string, unknown>; parse: (raw: unknown) => unknown } }
+      const validate = new Ajv({ strict: false }).compile(spec.input.schema)
+      for (const subject of [{}, { view: null }, { view: 'Track.mp3' }, { view: { file: '' }, item: {} }, { view: { file: '' }, item: { state: null } }]) {
+        const input = { subject, values: { engine: 'openai' } }
+        expect(validate(input), JSON.stringify(subject)).toBe(false)
+        expect(() => spec.input.parse(input)).toThrow(expect.objectContaining({ message: 'Expected a transcript subject.', code: 'INVALID_SUBJECT', outcome: 'not-applied' }))
+        expect(await mock.api.commands.execute('transcribe:properties-edit', input)).toEqual({ ok: false, error: { kind: 'invalid-input', message: 'Expected a transcript subject.' } })
+      }
+      expect(validate({ subject: { view: { v: 1, file: '' } }, values: { follow: false } })).toBe(true)
+      expect(set).not.toHaveBeenCalled()
+      expect(readSettings().engine).toBe('local')
+    } finally { await dispose() }
   })
 
   it('rejects unavailable connection edits and failed settings writes', async () => {

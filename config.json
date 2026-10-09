@@ -1128,7 +1128,350 @@
             }
           }
         }
+      },
+      {
+        "id": "workflow.provider",
+        "version": "1.0.0",
+        "method": "workflow.execute",
+        "operation": true,
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "metadata": {
+          "workflow": {
+            "providerId": "transcribe",
+            "providerVersion": "1.0.0",
+            "nodes": [
+              {
+                "id": "file",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "Transcribe a vault audio or video file using local Whisper or a configured connection",
+                "description": "Transcribe a vault audio or video file using local Whisper or a configured connection. Uses the owning plugin backend and its existing grants and revision checks.",
+                "effect": "execute",
+                "idempotent": false,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "file": {
+                                "type": "string"
+                              },
+                              "fileHash": {
+                                "type": "string"
+                              },
+                              "start": {
+                                "type": "number"
+                              },
+                              "end": {
+                                "type": "number"
+                              },
+                              "text": {
+                                "type": "string"
+                              },
+                              "language": {
+                                "type": "string"
+                              },
+                              "model": {
+                                "type": "string"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "transcriptionDurationMs": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "file",
+                              "fileHash",
+                              "start",
+                              "end",
+                              "text",
+                              "language",
+                              "createdAt"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    },
+                    "collection": {
+                      "selector": "$.value"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "type": "object",
+                  "properties": {
+                    "file": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "title": "file",
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "jobId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "title": "job ID",
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "engine": {
+                      "enum": [
+                        "local",
+                        "openai"
+                      ],
+                      "title": "engine"
+                    },
+                    "connectionId": {
+                      "type": "string",
+                      "maxLength": 4096,
+                      "title": "connection ID",
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "language": {
+                      "type": "string",
+                      "maxLength": 64,
+                      "title": "language",
+                      "ui": {
+                        "control": "text"
+                      }
+                    },
+                    "model": {
+                      "type": "string",
+                      "maxLength": 128,
+                      "title": "model",
+                      "ui": {
+                        "control": "text"
+                      }
+                    }
+                  },
+                  "required": [
+                    "file"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "file": {
+                            "type": "string"
+                          },
+                          "fileHash": {
+                            "type": "string"
+                          },
+                          "start": {
+                            "type": "number"
+                          },
+                          "end": {
+                            "type": "number"
+                          },
+                          "text": {
+                            "type": "string"
+                          },
+                          "language": {
+                            "type": "string"
+                          },
+                          "model": {
+                            "type": "string"
+                          },
+                          "createdAt": {
+                            "type": "string"
+                          },
+                          "transcriptionDurationMs": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "id",
+                          "file",
+                          "fileHash",
+                          "start",
+                          "end",
+                          "text",
+                          "language",
+                          "createdAt"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              },
+              {
+                "id": "cancel",
+                "type": "action",
+                "version": "1.0.0",
+                "displayName": "Cancel one transcription job",
+                "description": "Cancel one transcription job. Uses the owning plugin backend and its existing grants and revision checks.",
+                "effect": "write",
+                "idempotent": false,
+                "executionMode": "item",
+                "inputs": [
+                  {
+                    "id": "input",
+                    "label": "Input",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object"
+                    }
+                  }
+                ],
+                "outputs": [
+                  {
+                    "id": "output",
+                    "label": "Result",
+                    "dataType": "json",
+                    "schema": {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "object",
+                          "properties": {
+                            "cancelled": {
+                              "type": "boolean"
+                            }
+                          },
+                          "required": [
+                            "cancelled"
+                          ],
+                          "additionalProperties": false
+                        }
+                      },
+                      "required": [
+                        "value"
+                      ],
+                      "additionalProperties": false,
+                      "$schema": "http://json-schema.org/draft-07/schema#"
+                    }
+                  }
+                ],
+                "parameterSchema": {
+                  "type": "object",
+                  "properties": {
+                    "jobId": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 4096,
+                      "title": "job ID",
+                      "ui": {
+                        "control": "text"
+                      }
+                    }
+                  },
+                  "required": [
+                    "jobId"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "inputSchema": {
+                  "type": "object"
+                },
+                "outputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "value": {
+                      "type": "object",
+                      "properties": {
+                        "cancelled": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "cancelled"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "value"
+                  ],
+                  "additionalProperties": false,
+                  "$schema": "http://json-schema.org/draft-07/schema#"
+                },
+                "readiness": {
+                  "state": "Available"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "id": "workflow.catalog",
+        "version": "1.0.0",
+        "method": "workflow.catalog",
+        "request": {
+          "type": "unknown"
+        },
+        "response": {
+          "type": "unknown"
+        },
+        "operation": true
       }
+    ],
+    "largeDataOperations": [
+      "workflow.execute"
     ]
   },
   "permissions": {
@@ -1148,7 +1491,8 @@
     ],
     "storage": {
       "vault": true
-    }
+    },
+    "largeData": true
   },
   "connectionProviders": [
     {

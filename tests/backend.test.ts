@@ -337,8 +337,10 @@ describe('Transcribe package backend', () => {
     await mock.dispose()
   })
 
-  it('uses the selected account endpoint and opaque multipart authorization for OpenAI', async () => {
-    const mock = setup([{ id: 'field', provider: 'openai', baseUrl: 'https://proxy.example.test/v1', capabilities: ['ai.transcribe'], credentialState: 'ok' }])
+  it.each(['ok', 'stored'] as const)('uses the selected %s account endpoint and opaque multipart authorization for OpenAI', async credentialState => {
+    const mock = setup([{ id: 'field', provider: 'openai', baseUrl: 'https://proxy.example.test/v1', capabilities: ['ai.transcribe'], credentialState }])
+    expect(await mock.call('listConnections', {})).toMatchObject({ ok: true, data: { connections: [{ id: 'field', configured: true }] } })
+    expect(mock.accounts.authorize).not.toHaveBeenCalled()
     const response = await mock.call('file', { file: 'Media/audio.mp3', engine: 'openai', connectionId: 'field', language: 'de', jobId: 'cloud-job' })
     expect(response).toMatchObject({ ok: true, data: [{ model: 'whisper-1', start: 0.25, end: 2, text: 'Guten Tag.' }] })
     expect(mock.accounts.authorize).toHaveBeenCalledWith('field', 'ai.transcribe', { host: 'proxy.example.test', port: 443, security: 'tls' })

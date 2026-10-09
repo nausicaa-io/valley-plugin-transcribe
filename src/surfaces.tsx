@@ -1,3 +1,4 @@
+import { commandRegistrar, notApplied, propertiesResult } from './commandResults'
 import { transcribeServices } from './serviceClient'
 import { METADATA_PANEL_SEGMENT_V1, provideBookmarkSurface, type PluginProperty, type ValleyPluginApi } from '@valley/plugin-sdk'
 import type { SlotId } from '@valley/plugin-sdk/types'
@@ -156,8 +157,13 @@ export async function inspectTranscriptProperties(path: string): Promise<PluginP
     { id: 'tab', label: uiText('transcribe.tabsLabel'), value: selected.tab ?? (segments.length ? 'text' : 'setup'), type: 'select', options: [{ value: 'text', label: uiText('transcribe.tabText') }, { value: 'setup', label: uiText('transcribe.tabSetup') }] }
   ]
 }
-function pathFor(subject?: { item?: { state: PluginLinkState }; view: PluginLinkState }): string {
-  const raw = subject?.item?.state.file ?? subject?.view.file
+type TranscriptSubject = { item?: { state: PluginLinkState }; view: PluginLinkState }
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
+function isTranscriptSubject(value: unknown): value is TranscriptSubject {
+  return isRecord(value) && isRecord(value.view) && (value.item === undefined || isRecord(value.item) && isRecord(value.item.state))
+}
+function pathFor(subject?: TranscriptSubject): string {
+  const raw = subject?.item?.state?.file ?? subject?.view?.file
   return typeof raw === 'string' ? raw : ''
 }
 function Overview(): React.ReactElement {
@@ -198,15 +204,16 @@ export function registerTranscriptSurfaces(pluginApi: ValleyPluginApi): () => vo
     inspect: ({ subject }) => inspectTranscriptProperties(pathFor(subject)),
     render: ({ subject }) => { const file = pathFor(subject); return file ? renderMetadataSegment(file) : <Overview /> }
   }))
-  offs.push(pluginApi.commands.register({
+  offs.push(commandRegistrar(pluginApi)({
       id: 'properties-edit',
+      outputSchema: propertiesResult,
       label: 'Transcribe: Edit properties',
       labelKey: 'transcribe.property.edit',
       paletteSafe: false,
       sideEffect: 'write',
       input: {
-    schema: { type: 'object', properties: { subject: { type: 'object' }, values: transcriptValuesSchema }, required: ['subject', 'values'], additionalProperties: false },
-    parse: (raw) => { const input = raw as { subject?: Parameters<typeof pathFor>[0]; values?: unknown }; if (!input?.subject) throw new Error('Expected a transcript subject.'); return { path: pathFor(input.subject), values: parseTranscriptValues(input.values) } }
+    schema: { type: 'object', properties: { subject: { type: 'object', properties: { view: { type: 'object' }, item: { type: 'object', properties: { state: { type: 'object' } }, required: ['state'] } }, required: ['view'] }, values: transcriptValuesSchema }, required: ['subject', 'values'], additionalProperties: false },
+    parse: (raw) => { const input = raw as { subject?: unknown; values?: unknown }; if (!isTranscriptSubject(input?.subject)) throw notApplied('INVALID_SUBJECT', 'Expected a transcript subject.'); return { path: pathFor(input.subject), values: parseTranscriptValues(input.values) } }
   },
       run: async ({ path, values }) => {
     if (path && !(await pluginApi.vault.fileInfo(path))) throw new Error('The media file no longer exists.')

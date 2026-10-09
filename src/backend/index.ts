@@ -1,3 +1,4 @@
+import { createWorkflowAdapter } from './workflow'
 import { uiText, initBackendLocalization } from '../localization'
 import type { PluginBackendApi, PluginBackendOperationContext } from '@valley/plugin-sdk'
 import type { PluginNativeArgument } from '@valley/plugin-sdk/pluginNative'
@@ -21,6 +22,12 @@ const text = (value: unknown, fallback = '') => {
 const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)))
 
 export function register(api: PluginBackendApi): () => Promise<void> {
+  const workflow = createWorkflowAdapter(api, { readiness: async (nodeId, context) => {
+    if (nodeId === 'cancel') return { state: 'Available' }
+    const owner = context?.api ?? api
+    const [local, accounts] = await Promise.all([owner.native.resolve({ name: 'whisper' }), owner.accounts.list()])
+    return local || accounts.some(account => account.provider === 'openai' && account.capabilities.includes('ai.transcribe') && ['ok', 'stored'].includes(account.credentialState ?? 'absent')) ? { state: 'Available' } : { state: 'Unconfigured', reason: 'Install local Whisper or configure an OpenAI transcription connection in Transcribe and Accounts settings.' }
+  } })
   initBackendLocalization(api)
   type Progress = Omit<TranscribeProgress, 'jobId'>
   type Job = { cancelled: boolean; requestId: string; api: PluginBackendOperationContext['api']; done: Promise<void>; cancelling?: Promise<void>; model?: ReturnType<ReturnType<typeof createModelCache>['acquire']>; progress?: Progress; queuedProgress?: Progress; progressTimer?: ReturnType<typeof setTimeout>; progressAt?: number }
@@ -105,7 +112,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     }))
   }
   const handleOperation = (name: string, handler: (payload: Record<string, unknown>, context: PluginBackendOperationContext) => unknown | Promise<unknown>) => {
-    handlers.push(api.rpc.handleOperation(name, async (value, context) => {
+    handlers.push(workflow.operation(name, async (value, context) => {
       try {
         if (closing) throw new Error(uiText('backend.cancelled'))
         return { ok: true, data: await handler(object(value ?? {}), context) }
@@ -113,7 +120,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     }))
   }
   handleOperation('cancel', async ({ jobId }) => ({ cancelled: await cancel(text(jobId)) }))
-  handle('listConnections', async () => ({ connections: (await api.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe')).map((account) => ({ id: account.id, provider: account.provider, providerName: 'OpenAI', label: account.displayName ?? '', configured: account.credentialState === 'ok' })) }))
+  handle('listConnections', async () => ({ connections: (await api.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe')).map((account) => ({ id: account.id, provider: account.provider, providerName: 'OpenAI', label: account.displayName ?? '', configured: (account.credentialState === 'ok' || account.credentialState === 'stored') })) }))
   const resolveWhisper = async (owner: PluginBackendOperationContext['api'], executablePath?: string) => {
     const resolved = await owner.native.resolve({ name: 'whisper', executablePath })
     const framework = resolved?.interpreterPath?.match(/^(.*\/Python\.framework\/Versions\/[^/]+)\/bin\/python[^/]*$/)
@@ -170,7 +177,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
         result = await readJson(owner, transcript)
       } else {
         const connectionId = text(payload.connectionId)
-        const connections = (await owner.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe') && account.credentialState === 'ok')
+        const connections = (await owner.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe') && (account.credentialState === 'ok' || account.credentialState === 'stored'))
         const connection = connectionId ? connections.find((account) => account.id === connectionId) : connections[0]
         if (!connection) throw new Error(uiText('backend.connection'))
         const url = new URL(`${(connection.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')}/audio/transcriptions`)
@@ -219,6 +226,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     }
   })
   return () => {
+    workflow.dispose()
     if (disposal) return disposal
     closing = true
     for (const dispose of handlers) dispose()
