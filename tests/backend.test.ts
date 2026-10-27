@@ -11,6 +11,8 @@ import models from '../src/backend/models.json'
 
 const outputSchemas = new Map(config.runtime.services.flatMap(service => service.metadata?.command ? [[service.method, new Ajv({ strict: false, strictSchema: true, allErrors: true, validateFormats: false, allowUnionTypes: true, ownProperties: true }).compile(service.metadata.command.outputSchema)] as const] : []))
 
+// The host unwraps a driver result and validates only `data` against the declared output schema (pluginCommands.ts).
+const hostData = (value: unknown) => value && typeof value === 'object' && (value as { ok?: unknown }).ok === true ? (value as { data?: unknown }).data ?? null : undefined
 const encoded = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64')
 const result = { language: 'german', segments: [{ start: 0.25, end: 2, text: ' Guten Tag. ' }] }
 function setup(accounts: PluginAccountConnection[] = []) {
@@ -39,7 +41,7 @@ function setup(accounts: PluginAccountConnection[] = []) {
   }
   const dispose = register(api as unknown as PluginBackendApi)
   const scope = (owner = api, controller = new AbortController()): PluginBackendOperationContext => ({ id: `operation:${Math.random()}`, api: owner as unknown as PluginBackendOperationContext['api'], cancellation: controller.signal })
-  return { ...api, handlers, operations, scope, call: async (method: string, payload: unknown, context = scope()) => { const result = await (operations.has(method) ? operations.get(method)!(payload, context) : handlers.get(method)!(payload)); const validate = outputSchemas.get(method); if (validate) expect(validate(result), JSON.stringify(validate.errors)).toBe(true); return result }, dispose }
+  return { ...api, handlers, operations, scope, call: async (method: string, payload: unknown, context = scope()) => { const result = await (operations.has(method) ? operations.get(method)!(payload, context) : handlers.get(method)!(payload)); const validate = outputSchemas.get(method); if (validate && hostData(result) !== undefined) expect(validate(hostData(result)), JSON.stringify(validate.errors)).toBe(true); return result }, dispose }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -347,6 +349,19 @@ describe('Transcribe package backend', () => {
     expect(mock.network.fetch).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://proxy.example.test/v1/audio/transcriptions', credential: { handle: 'opaque-key', placement: 'header', name: 'Authorization', prefix: 'Bearer ' }, multipart: { fields: { model: 'whisper-1', response_format: 'verbose_json', 'timestamp_granularities[]': 'segment', language: 'de' }, files: [{ name: 'file', handle: 'media' }] } }))
     expect(mock.native.run).not.toHaveBeenCalled()
     expect(JSON.stringify(response)).not.toContain('opaque-key')
+    await mock.dispose()
+  })
+
+  it('declares output schemas for the unwrapped data the host validates, not the driver envelope', async () => {
+    const mock = setup()
+    const done = await mock.call('file', { file: 'Media/audio.mp3', model: 'small', jobId: 'schema-job' })
+    const cancelled = await mock.call('cancel', { jobId: 'unknown-job' })
+    expect(cancelled).toEqual({ ok: true, data: { cancelled: false } })
+    for (const [method, envelope] of [['file', done], ['cancel', cancelled]] as const) {
+      const validate = outputSchemas.get(method)!
+      expect(validate(hostData(envelope)), JSON.stringify(validate.errors)).toBe(true)
+      expect(validate(envelope)).toBe(false)
+    }
     await mock.dispose()
   })
 
