@@ -2,7 +2,7 @@
   "apiVersion": 5,
   "id": "transcribe",
   "name": "Transcribe",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Transcribes audio and video into timestamped segments with either local Whisper or an explicitly selected OpenAI connection.",
   "author": [
     "nausicaa"

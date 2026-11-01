@@ -80,12 +80,17 @@ export const MetadataSegment: FC<{ relPath: string }> = ({ relPath }) => {
   const listRef = React.useRef<HTMLDivElement | null>(null)
   const [chosenTab, setChosenTab] = useTranscriptField<boolean>(relPath, 'chosenTab', false)
   const [settingsError, setSettingsError] = React.useState('')
+  const [serviceError, setServiceError] = React.useState('')
+  const reportUnavailable = React.useCallback((reason: unknown) => {
+    const detail = reason instanceof Error ? reason.message : String(reason)
+    setServiceError(uiText('transcribe.serviceUnavailable', { reason: detail.replace(/^(Error:\s*)+/, '') }))
+  }, [])
 
   const { Segmented, SelectField } = api.ui.settings
   const { jobs, errors } = useTranscribeJobs()
   const job = jobForFile(jobs, relPath)
   const busy = job !== undefined
-  const error = settingsError || errors.get(relPath) || ''
+  const error = settingsError || errors.get(relPath) || serviceError
   const saveSetting = (key: 'engine' | 'openAiConnectionId', value: string): void => {
     void writeSetting(key, value).then(() => setSettingsError('')).catch((reason) => setSettingsError(`${uiText('transcribe.failed')} ${String(reason)}`))
   }
@@ -93,19 +98,19 @@ export const MetadataSegment: FC<{ relPath: string }> = ({ relPath }) => {
   // Transcript + settings, reloaded whenever either changes underneath us.
   React.useEffect(() => {
     let disposed = false
-    void transcribeServices(api).listConnections().then((result) => {
+    void Promise.resolve().then(() => transcribeServices(api).listConnections()).then((result) => {
       if (!disposed && result.ok) {
         setConnections((result.data?.connections ?? []).filter((connection) => connection.provider === 'openai'))
       }
-    })
+    }, (reason) => { if (!disposed) reportUnavailable(reason) })
     return () => { disposed = true }
-  }, [settings.engine, settings.openAiConnectionId])
+  }, [settings.engine, settings.openAiConnectionId, reportUnavailable])
 
   React.useEffect(() => {
     if (settings.engine !== 'local') setInstalled(null)
     let disposed = false
     const refresh = (): void => {
-      void segmentsForFile(relPath).then((next) => {
+      void Promise.resolve().then(() => segmentsForFile(relPath)).then((next) => {
         if (disposed) return
         setSegments(next)
         // A file that already has a transcript opens on it; one that does not
@@ -113,7 +118,7 @@ export const MetadataSegment: FC<{ relPath: string }> = ({ relPath }) => {
         // tab themselves — after that the choice is theirs for as long as the
         // file stays open.
         if (!chosenTab) setTab(next.length ? 'text' : 'setup')
-      })
+      }, (reason) => { if (!disposed) reportUnavailable(reason) })
       if (!disposed) setSettings(readSettings())
     }
     refresh()
@@ -122,21 +127,21 @@ export const MetadataSegment: FC<{ relPath: string }> = ({ relPath }) => {
       disposed = true
       off()
     }
-  }, [relPath, settings.engine, chosenTab, setTab])
+  }, [relPath, settings.engine, chosenTab, setTab, reportUnavailable])
 
   // Whether Whisper is actually on this machine. Asked once per mount so the
   // empty state can say "install it" instead of letting the button fail.
   React.useEffect(() => {
     let disposed = false
-    void transcribeServices(api).status(settings.whisperPath).then((result) => {
+    void Promise.resolve().then(() => transcribeServices(api).status(settings.whisperPath)).then((result) => {
       if (!disposed && result.ok && result.data) {
         setInstalled({ available: result.data.available, ffmpeg: result.data.ffmpeg })
       }
-    })
+    }, (reason) => { if (!disposed) reportUnavailable(reason) })
     return () => {
       disposed = true
     }
-  }, [settings.engine, settings.whisperPath])
+  }, [settings.engine, settings.whisperPath, reportUnavailable])
 
   // Subscribe only while following; the host publishes at a capped live rate
   // while media plays and immediately on seeks.
@@ -267,11 +272,11 @@ export const MetadataSegment: FC<{ relPath: string }> = ({ relPath }) => {
             onClick={() => void (job ? cancelJob(job.jobId) : transcribe())}
             // Nothing to press while the engine is coming down — it can take a
             // few seconds, and a live Cancel there just repeats a sent kill.
-            disabled={job?.cancelling || (!busy && (
+            disabled={job?.cancelling || (!busy && (serviceError !== '' || (
               settings.engine === 'local'
                 ? installed !== null && !installed.available
                 : !cloudReady
-            ))}
+            )))}
           >
             {busy ? <Stop /> : null}
             {job?.cancelling

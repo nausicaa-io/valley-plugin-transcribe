@@ -224,5 +224,6 @@
   "transcribe.notification.open": "Ouvrir la transcription",
   "transcribe.notification.error": "Voir l’erreur",
   "bookmark.view": "Vue de transcription",
-  "bookmark.item": "Élément sélectionné"
+  "bookmark.item": "Élément sélectionné",
+  "transcribe.serviceUnavailable": "Le service de transcription est indisponible : {{reason}}"
 }

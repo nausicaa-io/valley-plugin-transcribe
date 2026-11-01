@@ -224,5 +224,6 @@
   "transcribe.notification.open": "打开转录",
   "transcribe.notification.error": "查看错误",
   "bookmark.view": "转录视图",
-  "bookmark.item": "所选项目"
+  "bookmark.item": "所选项目",
+  "transcribe.serviceUnavailable": "转写服务不可用：{{reason}}"
 }
