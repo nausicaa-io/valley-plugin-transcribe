@@ -40,7 +40,7 @@ export interface TranscribeInput {
   durationMs?: number
 }
 
-type Result<T> = { ok: boolean; data?: T; error?: string }
+type Result<T> = { ok: boolean; data?: T; error?: string; code?: string; outcome?: 'not-applied' }
 function services(api: ValleyPluginApi) {
   return {
     file: (file: string, opts?: TranscribeInput) => api.backend.callOperation<Result<TranscriptSegment[]>>('file', { file, ...opts }),

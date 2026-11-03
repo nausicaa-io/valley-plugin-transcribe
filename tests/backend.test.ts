@@ -393,6 +393,22 @@ describe('Transcribe package backend', () => {
     await mock.dispose()
   })
 
+  it('reports deterministic preconditions as not applied and keeps engine failures unknown', async () => {
+    const mock = setup()
+    const refused = (code: string) => expect.objectContaining({ ok: false, code, outcome: 'not-applied' })
+    expect(await mock.call('file', { file: 'Media/audio.mp3', model: 'unlisted' })).toEqual(refused('INVALID_INPUT'))
+    expect(await mock.call('file', { file: 'Media/audio.mp3', engine: 'openai', connectionId: 'missing' })).toEqual(refused('CONNECTION_MISSING'))
+    mock.native.resolve.mockResolvedValueOnce(null as never)
+    expect(await mock.call('file', { file: 'Media/audio.mp3' })).toEqual(refused('TOOLS_MISSING'))
+    mock.files.openVault.mockRejectedValueOnce(new Error('Invalid vault input path'))
+    expect(await mock.call('file', { file: '../outside.mp3' })).toEqual(refused('INVALID_INPUT'))
+    mock.native.run.mockResolvedValueOnce({ exitCode: 1, outputs: [] })
+    const failed = await mock.call('file', { file: 'Media/audio.mp3', jobId: 'engine-failure' }) as Record<string, unknown>
+    expect(failed).toMatchObject({ ok: false })
+    expect(failed.outcome).toBeUndefined()
+    await mock.dispose()
+  })
+
   it('validates model and engine before opening a file', async () => {
     const mock = setup()
     for (const input of [{ model: 'unlisted' }, { engine: 'unknown' }]) expect(await mock.call('file', { file: 'Media/audio.mp3', ...input })).toMatchObject({ ok: false })

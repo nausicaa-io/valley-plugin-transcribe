@@ -19,6 +19,8 @@ const text = (value: unknown, fallback = '') => {
   if (typeof value !== 'string' || value.length > 4096 || value.includes('\0')) throw new Error(uiText('backend.text'))
   return value.trim()
 }
+const refused = (code: string, message: string) => Object.assign(new Error(message), { code, outcome: 'not-applied' as const })
+const refusal = (error: unknown) => (error as { outcome?: unknown } | null)?.outcome === 'not-applied' ? { code: String((error as { code?: unknown }).code ?? 'INVALID_INPUT'), outcome: 'not-applied' as const } : {}
 const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (character) => character.charCodeAt(0)))
 
 export function register(api: PluginBackendApi): () => Promise<void> {
@@ -116,7 +118,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
       try {
         if (closing) throw new Error(uiText('backend.cancelled'))
         return { ok: true, data: await handler(object(value ?? {}), context) }
-      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) } }
+      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error), ...refusal(error) } }
     }))
   }
   handleOperation('cancel', async ({ jobId }) => ({ cancelled: await cancel(text(jobId)) }))
@@ -133,16 +135,16 @@ export function register(api: PluginBackendApi): () => Promise<void> {
   handleOperation('file', async (payload, context) => {
     const owner = context.api
     const file = text(payload.file)
-    if (!file) throw new Error(uiText('backend.file'))
+    if (!file) throw refused('INVALID_INPUT', uiText('backend.file'))
     const jobId = text(payload.jobId, crypto.randomUUID())
-    if (!jobId || jobs.has(jobId)) throw new Error(uiText('backend.running'))
-    if (jobs.size >= 4) throw new Error(uiText('backend.capacity'))
+    if (!jobId || jobs.has(jobId)) throw refused('ALREADY_RUNNING', uiText('backend.running'))
+    if (jobs.size >= 4) throw refused('CAPACITY', uiText('backend.capacity'))
     const settings = owner.settings.get()
     const engine = text(payload.engine, 'local')
-    if (engine !== 'local' && engine !== 'openai') throw new Error(uiText('backend.engine'))
+    if (engine !== 'local' && engine !== 'openai') throw refused('INVALID_INPUT', uiText('backend.engine'))
     const language = normalizeWhisperLanguage(text(payload.language))
     const model = text(payload.model, DEFAULT_MODEL)
-    if (!MODEL_OPTIONS.some((option) => option.value === model)) throw new Error(uiText('backend.model'))
+    if (!MODEL_OPTIONS.some((option) => option.value === model)) throw refused('INVALID_INPUT', uiText('backend.model'))
     let finished!: () => void
     const job: Job = { cancelled: context.cancellation.aborted, requestId: `transcription:${jobId}`, api: owner, done: new Promise<void>((resolve) => { finished = resolve }) }
     jobs.set(jobId, job)
@@ -155,13 +157,13 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     try {
       ensureActive()
       report(jobId, { stage: 'start' })
-      const input = await owner.files.openVault(file)
+      const input = await owner.files.openVault(file).catch((error: unknown) => { throw Object.assign(refused('INVALID_INPUT', error instanceof Error ? error.message : String(error)), refusal(error)) })
       handles.push(input.handle)
       let result: WhisperJson
       let outputModel = model
       if (engine === 'local') {
         const [executable, ffmpeg] = await Promise.all([resolveWhisper(owner, text(settings.whisperPath) || undefined), owner.native.resolve({ name: 'ffmpeg' })])
-        if (!executable || !ffmpeg) throw new Error(uiText('backend.tools'))
+        if (!executable || !ffmpeg) throw refused('TOOLS_MISSING', uiText('backend.tools'))
         ensureActive()
         job.model = modelCache.acquire(model, percent => report(jobId, { stage: 'download', percent }))
         const weights = await job.model.result
@@ -179,7 +181,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
         const connectionId = text(payload.connectionId)
         const connections = (await owner.accounts.list()).filter((account) => account.provider === 'openai' && account.capabilities.includes('ai.transcribe') && (account.credentialState === 'ok' || account.credentialState === 'stored'))
         const connection = connectionId ? connections.find((account) => account.id === connectionId) : connections[0]
-        if (!connection) throw new Error(uiText('backend.connection'))
+        if (!connection) throw refused('CONNECTION_MISSING', uiText('backend.connection'))
         const url = new URL(`${(connection.baseUrl ?? 'https://api.openai.com/v1').replace(/\/+$/, '')}/audio/transcriptions`)
         const credential = await owner.accounts.authorize(connection.id, 'ai.transcribe', { host: url.hostname, port: Number(url.port || 443), security: 'tls' })
         ensureActive()
@@ -208,7 +210,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
       const message = job.cancelled ? uiText('backend.cancelled') : error instanceof Error ? error.message : uiText('backend.failed')
       terminal = { stage: job.cancelled ? 'cancelled' : 'error', message }
       if (!job.cancelled) await api.notifications.notify('failed', { sourceEventId: jobId, key: `finished:${file}`, targetItemId: file, title: uiText('transcribe.notifyFailedTitle'), body: message, actions: [{ id: 'open', kind: 'open', label: uiText('transcribe.notification.error') }] }).catch(() => false)
-      throw new Error(message)
+      throw Object.assign(new Error(message), job.cancelled ? {} : refusal(error))
     } finally {
       try {
         const cleanup = await Promise.allSettled([job.model?.cancel(), handles.length ? owner.files.release(handles) : undefined])

@@ -357,7 +357,7 @@ export function transcribeToStore(input: {
       jobId: input.jobId,
       durationMs: input.durationMs
     })
-    if (!response.ok || !response.data) throw new Error(response.error || uiText('transcribe.failed'))
+    if (!response.ok || !response.data) throw Object.assign(new Error(response.error || uiText('transcribe.failed')), response.outcome === 'not-applied' ? { code: response.code ?? 'INVALID_INPUT', outcome: response.outcome } : {})
     const segments = response.data
     return { segments, previous }
   })
