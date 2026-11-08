@@ -186,7 +186,7 @@ export function registerTranscriptSurfaces(pluginApi: ValleyPluginApi): () => vo
     restore: async (raw, _instanceId, options) => {
       if (raw.v !== 1) throw new Error('Unsupported transcript bookmark.')
       const file = typeof raw.file === 'string' ? raw.file : ''
-      if (file && !(await pluginApi.vault.fileInfo(file))) throw new Error('The bookmarked media file no longer exists.')
+      if (file && !(await pluginApi.realm.fileInfo(file))) throw new Error('The bookmarked media file no longer exists.')
       const segment = typeof raw.segmentId === 'string' ? (await loadSegments()).find((entry) => entry.id === raw.segmentId && entry.file === file) : undefined
       if (typeof raw.segmentId === 'string' && !segment) throw new Error('The bookmarked transcript segment no longer exists. It may have been replaced by a new transcription.')
       if (!options?.background && file && surface !== 'main_workspace') pluginApi.workspace.openFile(file, segment ? { type: 'media-time', seconds: segment.start } : undefined)
@@ -216,7 +216,7 @@ export function registerTranscriptSurfaces(pluginApi: ValleyPluginApi): () => vo
     parse: (raw) => { const input = raw as { subject?: unknown; values?: unknown }; if (!isTranscriptSubject(input?.subject)) throw notApplied('INVALID_SUBJECT', 'Expected a transcript subject.'); return { path: pathFor(input.subject), values: parseTranscriptValues(input.values) } }
   },
       run: async ({ path, values }) => {
-    if (path && !(await pluginApi.vault.fileInfo(path))) throw new Error('The media file no longer exists.')
+    if (path && !(await pluginApi.realm.fileInfo(path))) throw new Error('The media file no longer exists.')
     if (path && transcribeJobs().jobs.some((job) => job.relPath === path) && Object.keys(values).some((key) => ['engine', 'model', 'language', 'openAiConnectionId', 'whisperPath'].includes(key))) throw new Error('Wait for the active transcription before changing its setup.')
     const previous = Object.fromEntries((await inspectTranscriptProperties(path)).filter((property) => property.id in values).map((property) => [property.id, property.value])) as Record<string, string | boolean>
     if ('openAiConnectionId' in values) previous.openAiConnectionId = readSettings().openAiConnectionId

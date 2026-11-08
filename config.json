@@ -924,7 +924,7 @@
         "metadata": {
           "command": {
             "id": "file",
-            "description": "Transcribe a vault audio or video file using local Whisper or a configured connection",
+            "description": "Transcribe a realm audio or video file using local Whisper or a configured connection",
             "effect": "execute",
             "inputSchema": {
               "type": "object",
@@ -1083,8 +1083,8 @@
                 "id": "file",
                 "type": "action",
                 "version": "1.0.0",
-                "displayName": "Transcribe a vault audio or video file using local Whisper or a configured connection",
-                "description": "Transcribe a vault audio or video file using local Whisper or a configured connection. Uses the owning plugin backend and its existing grants and revision checks.",
+                "displayName": "Transcribe a realm audio or video file using local Whisper or a configured connection",
+                "description": "Transcribe a realm audio or video file using local Whisper or a configured connection. Uses the owning plugin backend and its existing grants and revision checks.",
                 "effect": "execute",
                 "idempotent": false,
                 "executionMode": "item",
@@ -1424,7 +1424,7 @@
       "ai.transcribe"
     ],
     "storage": {
-      "vault": true
+      "realm": true
     },
     "largeData": true
   },

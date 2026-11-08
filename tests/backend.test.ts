@@ -35,7 +35,7 @@ function setup(accounts: PluginAccountConnection[] = []) {
       emit
     },
     native: { resolve: vi.fn(async ({ name }: { name: string }) => ({ handle: name, path: `/fixture/${name}` })), run, cancel: vi.fn(async () => true), onOutput: vi.fn((_listener: Parameters<PluginBackendApi['native']['onOutput']>[0]) => () => {}) },
-    files: { openVault: vi.fn(async (file: string) => ({ handle: 'media', name: 'audio.mp3', size: 10, sha1: file === 'Media/audio.mp3' ? 'file-hash' : `file-hash-${file}` })), cached, read: vi.fn(async () => ({ base64: encoded(result), done: true })), release },
+    files: { openRealm: vi.fn(async (file: string) => ({ handle: 'media', name: 'audio.mp3', size: 10, sha1: file === 'Media/audio.mp3' ? 'file-hash' : `file-hash-${file}` })), cached, read: vi.fn(async () => ({ base64: encoded(result), done: true })), release },
     network: { download, fetch, cancel: vi.fn(async (_requestId: string) => true), onProgress: vi.fn((_listener: (progress: PluginNetworkProgress) => void) => () => {}) },
     accounts: { list: async () => accounts, authorize }, settings: { get: () => ({}) }
   }
@@ -245,7 +245,7 @@ describe('Transcribe package backend', () => {
     const cloud = held<Awaited<ReturnType<typeof mock.network.fetch>>>()
     const owner = {
       ...mock,
-      files: { ...mock.files, openVault: vi.fn(mock.files.openVault.getMockImplementation()!), release: vi.fn(async () => {}) },
+      files: { ...mock.files, openRealm: vi.fn(mock.files.openRealm.getMockImplementation()!), release: vi.fn(async () => {}) },
       native: { ...mock.native, run: vi.fn(() => native.promise) },
       network: { ...mock.network, fetch: vi.fn(() => cloud.promise) }
     }
@@ -255,7 +255,7 @@ describe('Transcribe package backend', () => {
     expect(settled).toBe(false)
     expect(mock.handlers.has('file')).toBe(false)
     expect(mock.handlers.has('cancel')).toBe(false)
-    expect(mock.files.openVault).not.toHaveBeenCalled()
+    expect(mock.files.openRealm).not.toHaveBeenCalled()
     expect(mock.native.run).not.toHaveBeenCalled()
     expect(mock.network.fetch).not.toHaveBeenCalled()
     if (engine === 'local') native.resolve({ exitCode: 0, outputs: [{ handle: 'output', name: 'audio.json', size: 100 }] })
@@ -317,7 +317,7 @@ describe('Transcribe package backend', () => {
     mock.files.release.mockImplementation(async (handles) => { if (handles.includes('media')) await released.promise })
     const runs = Array.from({ length: 4 }, (_, index) => mock.call('file', { file: `${index}.mp3`, jobId: `job-${index}` }))
     expect(await mock.call('file', { file: 'overflow.mp3', jobId: 'overflow' })).toMatchObject({ ok: false, error: expect.stringContaining('Four transcriptions') })
-    expect(mock.files.openVault).toHaveBeenCalledTimes(4)
+    expect(mock.files.openRealm).toHaveBeenCalledTimes(4)
     outputs.resolve({ exitCode: 0, outputs: [{ handle: 'output', name: 'audio.json', size: 100 }] })
     await vi.waitFor(() => expect(mock.files.release).toHaveBeenCalledTimes(4))
     expect(await mock.call('file', { file: 'still-full.mp3', jobId: 'still-full' })).toMatchObject({ ok: false })
@@ -400,7 +400,7 @@ describe('Transcribe package backend', () => {
     expect(await mock.call('file', { file: 'Media/audio.mp3', engine: 'openai', connectionId: 'missing' })).toEqual(refused('CONNECTION_MISSING'))
     mock.native.resolve.mockResolvedValueOnce(null as never)
     expect(await mock.call('file', { file: 'Media/audio.mp3' })).toEqual(refused('TOOLS_MISSING'))
-    mock.files.openVault.mockRejectedValueOnce(new Error('Invalid vault input path'))
+    mock.files.openRealm.mockRejectedValueOnce(new Error('Invalid realm input path'))
     expect(await mock.call('file', { file: '../outside.mp3' })).toEqual(refused('INVALID_INPUT'))
     mock.native.run.mockResolvedValueOnce({ exitCode: 1, outputs: [] })
     const failed = await mock.call('file', { file: 'Media/audio.mp3', jobId: 'engine-failure' }) as Record<string, unknown>
@@ -412,7 +412,7 @@ describe('Transcribe package backend', () => {
   it('validates model and engine before opening a file', async () => {
     const mock = setup()
     for (const input of [{ model: 'unlisted' }, { engine: 'unknown' }]) expect(await mock.call('file', { file: 'Media/audio.mp3', ...input })).toMatchObject({ ok: false })
-    expect(mock.files.openVault).not.toHaveBeenCalled()
+    expect(mock.files.openRealm).not.toHaveBeenCalled()
     await mock.dispose()
   })
 })

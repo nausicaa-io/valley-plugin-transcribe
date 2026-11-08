@@ -9,7 +9,7 @@ import { highlightPieces, matchRanges, searchLines } from '../src/search'
 
 afterEach(cleanup)
 
-describe('vault transcript search', () => {
+describe('realm transcript search', () => {
   const parent = { id: 'lecture', file: 'Research/Lecture.mp3', fileHash: 'hash', language: 'de', createdAt: '2026-09-10T10:00:00.000Z' }
   const segment = { transcriptionId: 'lecture', position: 8, segmentId: 'hash:8', start: 125.5, end: 134, text: 'Impulserhaltung im geschlossenen System' }
 

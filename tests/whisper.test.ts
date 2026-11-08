@@ -10,11 +10,11 @@ import {
 } from '../src/backend/parsers'
 
 describe('whisperArgv', () => {
-  const base = { audio: '/vault/talk.mp4', model: 'small', outputDir: '/tmp/out' }
+  const base = { audio: '/realm/talk.mp4', model: 'small', outputDir: '/tmp/out' }
 
   it('asks for JSON in a private output dir', () => {
     const argv = whisperArgv({ ...base, language: 'de' })
-    expect(argv[0]).toBe('/vault/talk.mp4')
+    expect(argv[0]).toBe('/realm/talk.mp4')
     expect(argv).toContain('--output_format')
     expect(argv[argv.indexOf('--output_format') + 1]).toBe('json')
     expect(argv[argv.indexOf('--output_dir') + 1]).toBe('/tmp/out')
@@ -38,10 +38,10 @@ describe('whisperArgv', () => {
   })
 
   it('never builds a shell string, whatever the file is called', () => {
-    const argv = whisperArgv({ ...base, audio: '/vault/a b; rm -rf ~/.mp3', language: '' })
+    const argv = whisperArgv({ ...base, audio: '/realm/a b; rm -rf ~/.mp3', language: '' })
     // One argv entry, quoting and all. `spawn` runs with `shell:false`, so the
     // semicolon is part of a file name and nothing else.
-    expect(argv[0]).toBe('/vault/a b; rm -rf ~/.mp3')
+    expect(argv[0]).toBe('/realm/a b; rm -rf ~/.mp3')
     expect(argv.filter((token) => token.includes(';'))).toHaveLength(1)
   })
 })

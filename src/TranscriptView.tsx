@@ -14,7 +14,7 @@ export function createTranscriptSearchAction(pluginApi: ValleyPluginApi): Search
     async open(record, context) {
       if (typeof record.segmentId !== 'string') return false
       const segment = (await loadSegments()).find((entry) => entry.id === record.segmentId)
-      if (!segment || !(await pluginApi.vault.fileInfo(segment.file))) return false
+      if (!segment || !(await pluginApi.realm.fileInfo(segment.file))) return false
       pluginApi.workspace.openFile(segment.file, { type: 'media-time', seconds: segment.start }, { newTab: context.newTab })
       return true
     }
@@ -26,7 +26,7 @@ export function createTranscriptSearchAction(pluginApi: ValleyPluginApi): Search
  *
  * These predate the note-panel segment and stay for the two jobs it does not do:
  * the sidebar keeps a transcript open beside an unrelated file, and the page
- * lists **every** transcript in the vault at once. Transcription itself now
+ * lists **every** transcript in the realm at once. Transcription itself now
  * belongs to the panel segment, which is where a person is already looking when
  * they want it — so this view reads rather than writes.
  */

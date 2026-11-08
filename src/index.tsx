@@ -68,7 +68,7 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
   const offSurfaces = registerTranscriptSurfaces(api)
   const offSearch = api.interop.extensions.provide(SEARCH_RESULT_ACTION_V1, createTranscriptSearchAction(api))
 
-  const usage = 'transcribe file <vault-relative-file> [--model <model>] [--language <code>]'
+  const usage = 'transcribe file <realm-relative-file> [--model <model>] [--language <code>]'
 
   const offCommand = commandRegistrar(api)({
       id: 'file',
@@ -118,7 +118,7 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
       const segments = value as TranscriptSegment[]
       return segments.map((segment) => segment.text).join(' ')
     },
-      revision: async (input) => ({ file: await api.vault.fileInfo(input.file), segments: await segmentsForFile(input.file, api), settings: readSettings(api) }),
+      revision: async (input) => ({ file: await api.realm.fileInfo(input.file), segments: await segmentsForFile(input.file, api), settings: readSettings(api) }),
       preview: (input) => ({
       action: 'transcribe-file',
       file: input.file,
@@ -130,7 +130,7 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
   const fileInput = { schema: { type: 'object', properties: { file: { type: 'string', minLength: 1 } }, required: ['file'], additionalProperties: false }, parse: (raw: unknown) => { const file = (raw as Record<string, unknown>)?.file; if (typeof file !== 'string' || !file.trim()) throw new Error('Expected a media file path.'); return { file } } }
   const extraCommands = [
     commandRegistrar(api)({ id: 'list', outputSchema: segmentsResult, label: 'Transcribe: List transcripts', labelKey: 'transcribe.command.list', paletteSafe: false, sideEffect: 'read', input: { schema: { type: 'object', properties: { file: { type: 'string' }, query: { type: 'string' } }, additionalProperties: false }, parse: (raw) => { const input = (raw ?? {}) as Record<string, unknown>; for (const key of ['file', 'query']) if (input[key] !== undefined && typeof input[key] !== 'string') throw new Error('Expected transcript filter text.'); return { file: input.file as string | undefined, query: input.query as string | undefined } } }, run: async ({ file, query }) => (await loadSegments(api)).filter((segment) => (!file || segment.file === file) && (!query || segment.text.toLowerCase().includes(query.toLowerCase()))) }),
-    commandRegistrar(api)({ id: 'get', outputSchema: segmentsResult, label: 'Transcribe: Read transcript', labelKey: 'transcribe.command.get', paletteSafe: false, sideEffect: 'read', input: fileInput, run: async ({ file }) => { if (!(await api.vault.fileInfo(file))) throw new Error('The media file no longer exists.'); return segmentsForFile(file, api) } }),
+    commandRegistrar(api)({ id: 'get', outputSchema: segmentsResult, label: 'Transcribe: Read transcript', labelKey: 'transcribe.command.get', paletteSafe: false, sideEffect: 'read', input: fileInput, run: async ({ file }) => { if (!(await api.realm.fileInfo(file))) throw new Error('The media file no longer exists.'); return segmentsForFile(file, api) } }),
     commandRegistrar(api)({ id: 'jobs', outputSchema: jobsResult, label: 'Transcribe: List jobs', labelKey: 'transcribe.command.jobs', paletteSafe: false, sideEffect: 'read', run: () => ({ jobs: transcribeJobs(api).jobs, errors: Object.fromEntries(transcribeJobs(api).errors) }) }),
     commandRegistrar(api)({
       id: 'cancel',
@@ -145,7 +145,7 @@ export function register(api: ValleyPluginApi): () => Promise<void> {
       preview: ({ jobId }) => ({ action: 'cancel-transcription', jobId })
     }),
     // Opening the media tab and seeking the player changes window state; it is not a read.
-    commandRegistrar(api)({ id: 'open-segment', outputSchema: segmentResult, label: 'Transcribe: Open segment', labelKey: 'transcribe.command.openSegment', paletteSafe: false, sideEffect: 'execute', input: { schema: { type: 'object', properties: { id: { type: 'string', minLength: 1 } }, required: ['id'], additionalProperties: false }, parse: (raw) => { const id = (raw as Record<string, unknown>)?.id; if (typeof id !== 'string' || !id.trim()) throw new Error('Expected a transcript segment id.'); return { id } } }, preview: ({ id }) => ({ action: 'open-segment', id }), run: async ({ id }) => { const segment = (await loadSegments(api)).find((entry) => entry.id === id); if (!segment) throw notApplied('SEGMENT_NOT_FOUND', 'The transcript segment no longer exists.'); if (!(await api.vault.fileInfo(segment.file))) throw notApplied('FILE_NOT_FOUND', 'The media file no longer exists.'); api.workspace.openFile(segment.file, { type: 'media-time', seconds: segment.start }); return segment } })
+    commandRegistrar(api)({ id: 'open-segment', outputSchema: segmentResult, label: 'Transcribe: Open segment', labelKey: 'transcribe.command.openSegment', paletteSafe: false, sideEffect: 'execute', input: { schema: { type: 'object', properties: { id: { type: 'string', minLength: 1 } }, required: ['id'], additionalProperties: false }, parse: (raw) => { const id = (raw as Record<string, unknown>)?.id; if (typeof id !== 'string' || !id.trim()) throw new Error('Expected a transcript segment id.'); return { id } } }, preview: ({ id }) => ({ action: 'open-segment', id }), run: async ({ id }) => { const segment = (await loadSegments(api)).find((entry) => entry.id === id); if (!segment) throw notApplied('SEGMENT_NOT_FOUND', 'The transcript segment no longer exists.'); if (!(await api.realm.fileInfo(segment.file))) throw notApplied('FILE_NOT_FOUND', 'The media file no longer exists.'); api.workspace.openFile(segment.file, { type: 'media-time', seconds: segment.start }); return segment } })
   ]
 
   // Offer "Transcribe file…" on media files in the file tree. Core neither

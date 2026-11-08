@@ -157,7 +157,7 @@ export function register(api: PluginBackendApi): () => Promise<void> {
     try {
       ensureActive()
       report(jobId, { stage: 'start' })
-      const input = await owner.files.openVault(file).catch((error: unknown) => { throw Object.assign(refused('INVALID_INPUT', error instanceof Error ? error.message : String(error)), refusal(error)) })
+      const input = await owner.files.openRealm(file).catch((error: unknown) => { throw Object.assign(refused('INVALID_INPUT', error instanceof Error ? error.message : String(error)), refusal(error)) })
       handles.push(input.handle)
       let result: WhisperJson
       let outputModel = model
